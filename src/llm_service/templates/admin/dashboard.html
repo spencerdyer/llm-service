@@ -1,0 +1,1783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Service Admin</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-hover: #334155;
+            --text: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --border: #334155;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 0.75rem 2rem 2rem; }
+
+        header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.5rem 0; margin-bottom: 0.5rem;
+        }
+
+        h1 { font-size: 1.125rem; font-weight: 600; color: var(--text-secondary); }
+        h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; }
+
+        .badge {
+            display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px;
+            font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+        }
+        .badge-success { background: var(--success); color: #000; }
+        .badge-warning { background: var(--warning); color: #000; }
+        .badge-error { background: var(--error); color: #fff; }
+        .badge-info { background: var(--accent); color: #fff; }
+        .badge-mlx { background: #8b5cf6; color: #fff; }
+        .badge-vllm { background: #06b6d4; color: #000; }
+        .badge-gguf { background: #f97316; color: #000; }
+        .badge-thinking { background: #ec4899; color: #fff; }
+        .badge-tools { background: #10b981; color: #fff; }
+
+        .tabs {
+            display: flex; gap: 0.25rem; margin-bottom: 1.5rem;
+            background: var(--bg-secondary); padding: 0.25rem; border-radius: 0.5rem;
+        }
+        .tab {
+            padding: 0.5rem 1.25rem; background: none; border: none;
+            color: var(--text-secondary); font-size: 0.875rem; font-weight: 500;
+            cursor: pointer; border-radius: 0.375rem; transition: all 0.15s;
+        }
+        .tab:hover { color: var(--text); background: var(--bg-hover); }
+        .tab.active {
+            color: var(--text); background: var(--accent);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .card {
+            background: var(--bg-secondary); border-radius: 0.5rem; padding: 1.5rem;
+            border: 1px solid var(--border); margin-bottom: 1.5rem;
+        }
+        .card:last-child { margin-bottom: 0; }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+
+        .status-item {
+            display: flex; justify-content: space-between; padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .status-item:last-child { border-bottom: none; }
+        .status-label { color: var(--text-secondary); }
+        .status-value { font-weight: 500; }
+
+        button, .btn {
+            display: inline-block; padding: 0.5rem 1rem; background: var(--accent);
+            color: white; border: none; border-radius: 0.375rem; font-size: 0.875rem;
+            font-weight: 500; cursor: pointer; transition: background 0.2s;
+        }
+        button:hover, .btn:hover { background: var(--accent-hover); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.btn-secondary { background: var(--bg-hover); }
+        button.btn-secondary:hover { background: var(--border); }
+        button.btn-danger { background: var(--error); }
+        button.btn-small { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+
+        input, select, textarea {
+            width: 100%; padding: 0.5rem 0.75rem; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 0.375rem;
+            color: var(--text); font-size: 0.875rem;
+        }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+        .form-group { margin-bottom: 1rem; }
+        .form-group:last-child { margin-bottom: 0; }
+        .form-group label { display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.875rem; }
+        .form-row { display: flex; gap: 0.5rem; }
+
+        .model-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .model-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.75rem 1rem; background: var(--bg); border-radius: 0.375rem;
+            border: 1px solid var(--border);
+        }
+        .model-item:hover { border-color: var(--accent); }
+        .model-item.active { border-color: var(--success); background: rgba(34, 197, 94, 0.1); }
+        .model-info { flex: 1; }
+        .model-name { font-weight: 500; }
+        .model-meta { font-size: 0.75rem; color: var(--text-secondary); }
+        .actions { display: flex; gap: 0.5rem; align-items: center; }
+
+        .filter-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .filter-btn {
+            padding: 0.25rem 0.75rem; background: var(--bg); border: 1px solid var(--border);
+            border-radius: 0.25rem; color: var(--text-secondary); font-size: 0.75rem;
+            cursor: pointer;
+        }
+        .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+        .filter-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+        .search-results { margin-top: 1rem; max-height: 400px; overflow-y: auto; }
+        .search-result {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.75rem; border-bottom: 1px solid var(--border);
+        }
+        .search-result:hover { background: var(--bg-hover); }
+        .search-result-info { flex: 1; }
+        .search-result-name { font-weight: 500; }
+        .search-result-name a:hover { text-decoration: underline; }
+        .search-result-stats { font-size: 0.75rem; color: var(--text-secondary); }
+
+        /* Test page layout */
+        .test-layout { display: grid; grid-template-columns: 250px 1fr; gap: 1.5rem; }
+        @media (max-width: 900px) { .test-layout { grid-template-columns: 1fr; } }
+
+        .test-sidebar { display: flex; flex-direction: column; gap: 1rem; }
+        .test-main { display: flex; flex-direction: column; }
+
+        .chat-container { display: flex; flex-direction: column; height: 500px; }
+        .chat-messages {
+            flex: 1; overflow-y: auto; padding: 1rem; background: var(--bg);
+            border-radius: 0.375rem; margin-bottom: 1rem;
+        }
+        .chat-message { margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 0.5rem; max-width: 85%; }
+        .chat-message.user { background: var(--accent); margin-left: auto; }
+        .chat-message.assistant { background: var(--bg-secondary); border: 1px solid var(--border); }
+        .chat-message-role { font-size: 0.7rem; text-transform: uppercase; opacity: 0.7; margin-bottom: 0.25rem; }
+        .chat-message-content { white-space: pre-wrap; }
+        .chat-input-area { display: flex; gap: 0.5rem; }
+        .chat-input-area textarea { flex: 1; resize: none; min-height: 60px; }
+
+        .response-info {
+            display: flex; gap: 1.5rem; padding: 0.75rem 1rem; background: var(--bg);
+            border-radius: 0.375rem; font-size: 0.8rem; color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+        .response-info-item { display: flex; gap: 0.5rem; }
+        .response-info-label { color: var(--text-secondary); }
+        .response-info-value { color: var(--text); font-weight: 500; font-family: monospace; }
+
+        .quick-test { padding: 0.75rem; background: var(--bg); border-radius: 0.375rem; cursor: pointer; border: 1px solid var(--border); }
+        .quick-test:hover { border-color: var(--accent); }
+        .quick-test-title { font-weight: 500; font-size: 0.875rem; margin-bottom: 0.25rem; }
+        .quick-test-desc { font-size: 0.75rem; color: var(--text-secondary); }
+
+        .toggle-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0; }
+        .toggle-label { flex: 1; font-size: 0.875rem; }
+        .toggle { position: relative; width: 40px; height: 22px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; cursor: pointer; inset: 0; background: var(--bg-hover);
+            border-radius: 22px; transition: 0.3s;
+        }
+        .toggle-slider:before {
+            position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+            background: white; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle input:checked + .toggle-slider { background: var(--accent); }
+        .toggle input:checked + .toggle-slider:before { transform: translateX(18px); }
+
+        .memory-bar {
+            height: 6px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; margin-top: 0.5rem;
+        }
+        .memory-bar-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+
+        .empty-state { text-align: center; padding: 2rem; color: var(--text-secondary); }
+
+        .toast {
+            position: fixed; bottom: 1rem; right: 1rem; padding: 1rem 1.5rem;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: 0.5rem; box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease; z-index: 1000;
+        }
+        .toast.error { border-color: var(--error); }
+        @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .spinner {
+            display: inline-block; width: 1rem; height: 1rem;
+            border: 2px solid var(--text-secondary); border-top-color: transparent;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 2rem; color: var(--text-secondary); }
+
+        /* Modal styles */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 2000; opacity: 0; visibility: hidden; transition: all 0.2s;
+        }
+        .modal-overlay.active { opacity: 1; visibility: visible; }
+        .modal {
+            background: var(--bg-secondary); border-radius: 0.75rem;
+            border: 1px solid var(--border); width: 90%; max-width: 600px;
+            max-height: 90vh; overflow-y: auto; transform: scale(0.95);
+            transition: transform 0.2s;
+        }
+        .modal-overlay.active .modal { transform: scale(1); }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+        }
+        .modal-header h2 { margin: 0; font-size: 1.125rem; }
+        .modal-close {
+            background: none; border: none; color: var(--text-secondary);
+            font-size: 1.5rem; cursor: pointer; padding: 0; line-height: 1;
+        }
+        .modal-close:hover { color: var(--text); }
+        .modal-body { padding: 1.5rem; }
+        .modal-footer {
+            display: flex; justify-content: flex-end; gap: 0.5rem;
+            padding: 1rem 1.5rem; border-top: 1px solid var(--border);
+        }
+        .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .form-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; }
+
+        /* Favorite button */
+        .btn-favorite {
+            background: none; border: none; cursor: pointer; padding: 0.25rem;
+            font-size: 1.1rem; line-height: 1; color: var(--text-secondary);
+            transition: color 0.2s, transform 0.1s;
+        }
+        .btn-favorite:hover { color: var(--warning); transform: scale(1.1); }
+        .btn-favorite.active { color: var(--warning); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>LLM Service Admin</h1>
+            <div>
+                <span class="badge badge-info">{{ platform }}</span>
+                {% if status.loaded_count > 0 %}
+                    <span class="badge badge-success">{{ status.loaded_count }} Model{{ 's' if status.loaded_count > 1 else '' }} ({{ status.total_memory_mb }} MB)</span>
+                {% else %}
+                    <span class="badge badge-warning">No Models Loaded</span>
+                {% endif %}
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="status">Status</button>
+            <button class="tab" data-tab="models">Models</button>
+            <button class="tab" data-tab="download">Download</button>
+            <button class="tab" data-tab="analytics">Analytics</button>
+            <button class="tab" data-tab="test">Test</button>
+            <button class="tab" data-tab="settings">Settings</button>
+        </div>
+
+        <!-- Status Tab -->
+        <div id="tab-status" class="tab-content active">
+            <div class="grid">
+                <div class="card">
+                    <h2>Service Status</h2>
+                    <div class="status-item">
+                        <span class="status-label">Backend</span>
+                        <span class="status-value">{{ status.backend_type | upper }}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Platform</span>
+                        <span class="status-value">{{ status.platform }}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Loaded Models</span>
+                        <span class="status-value">{{ status.loaded_count }}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Total Memory</span>
+                        <span class="status-value">{{ status.total_memory_mb }} MB</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Models Directory</span>
+                        <span class="status-value" style="font-size: 0.75rem; font-family: monospace;">{{ models_dir }}</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Loaded Models</h2>
+                    {% if status.loaded_models %}
+                        <div class="model-list">
+                            {% for model in status.loaded_models %}
+                                <div class="model-item {% if model.is_active %}active{% endif %}">
+                                    <div class="model-info">
+                                        <div class="model-name">
+                                            {{ model.name }}
+                                            {% if model.is_active %}<span class="badge badge-success" style="margin-left: 0.5rem;">Active</span>{% endif %}
+                                        </div>
+                                        <div class="model-meta">{{ model.memory_mb }} MB</div>
+                                    </div>
+                                    <div class="actions">
+                                        {% if not model.is_active %}
+                                            <button onclick="setActiveModel('{{ model.id }}')" class="btn-small btn-secondary">Activate</button>
+                                        {% endif %}
+                                        <button onclick="unloadModel('{{ model.id }}')" class="btn-small btn-danger">Unload</button>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="empty-state"><p>No models loaded</p></div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Models Tab -->
+        <div id="tab-models" class="tab-content">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin-bottom: 0;">Loaded Models ({{ status.total_memory_mb }} MB)</h2>
+                    {% if status.loaded_count > 0 %}
+                        <button onclick="unloadAllModels()" class="btn-secondary btn-small">Unload All</button>
+                    {% endif %}
+                </div>
+                {% if status.loaded_models %}
+                    <div class="model-list">
+                        {% for model in status.loaded_models %}
+                            <div class="model-item {% if model.is_active %}active{% endif %}">
+                                <div class="model-info">
+                                    <div class="model-name">
+                                        {{ model.name }}
+                                        {% if model.is_active %}<span class="badge badge-success" style="margin-left: 0.5rem;">Active</span>{% endif %}
+                                    </div>
+                                    <div class="model-meta">
+                                        <span class="badge badge-{{ model.model_type }}">{{ model.model_type | upper }}</span>
+                                        {{ model.memory_mb }} MB
+                                    </div>
+                                </div>
+                                <div class="actions">
+                                    {% if not model.is_active %}
+                                        <button onclick="setActiveModel('{{ model.id }}')" class="btn-small btn-secondary">Activate</button>
+                                    {% endif %}
+                                    <button onclick="unloadModel('{{ model.id }}')" class="btn-small btn-danger">Unload</button>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state"><p>No models loaded</p></div>
+                {% endif %}
+            </div>
+
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin-bottom: 0;">Available Models</h2>
+                    <button onclick="scanLocalModels()" class="btn-secondary btn-small">Scan Local</button>
+                </div>
+
+                <div class="filter-bar">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="favorites">Favorites</button>
+                    <button class="filter-btn" data-filter="mlx">MLX</button>
+                    <button class="filter-btn" data-filter="vllm">vLLM</button>
+                    <button class="filter-btn" data-filter="gguf">GGUF</button>
+                </div>
+
+                <div class="model-list" id="available-models">
+                    {% set ready_models = models | selectattr('status', 'equalto', 'ready') | list %}
+                    {% if ready_models %}
+                        {% for model in ready_models %}
+                            <div class="model-item" data-type="{{ model.model_type }}" data-favorite="{{ 'true' if model.favorite else 'false' }}">
+                                <button class="btn-favorite {{ 'active' if model.favorite else '' }}" onclick="toggleFavorite('{{ model.id }}', this)" title="Toggle favorite">
+                                    {{ '★' if model.favorite else '☆' }}
+                                </button>
+                                <div class="model-info">
+                                    <div class="model-name">{{ model.name }}</div>
+                                    <div class="model-meta">
+                                        <span class="badge badge-{{ model.model_type }}">{{ model.model_type | upper }}</span>
+                                        {% if model.capabilities.thinking %}<span class="badge badge-thinking">Thinking</span>{% endif %}
+                                        {% if model.capabilities.tool_use %}<span class="badge badge-tools">Tools</span>{% endif %}
+                                        {% if model.quantization %}{{ model.quantization }}{% endif %}
+                                    </div>
+                                </div>
+                                <div class="actions">
+                                    <button onclick="openConfigModal('{{ model.id }}')" class="btn-secondary btn-small">Config</button>
+                                    <button onclick="loadModel('{{ model.id }}')" class="btn-small">Load</button>
+                                    <button onclick="deleteModel('{{ model.id }}', '{{ model.name }}')" class="btn-danger btn-small">Delete</button>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="empty-state">
+                            <p>No models available</p>
+                            <p style="font-size: 0.875rem;">Download models or scan your local directory</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Download Tab -->
+        <div id="tab-download" class="tab-content">
+            <div class="card">
+                <h2>Search HuggingFace</h2>
+                <div class="form-group">
+                    <div class="form-row">
+                        <input type="text" id="search-query" placeholder="e.g., mlx-community/Llama, TheBloke/Mistral"
+                               onkeypress="if(event.key === 'Enter') searchModels()" style="flex: 2;">
+                        <button onclick="searchModels()">Search</button>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <label style="color: var(--text-secondary); font-size: 0.875rem; white-space: nowrap;">Sort by:</label>
+                        <select id="search-sort" style="width: auto;" onchange="searchModels()">
+                            <option value="downloads">Downloads</option>
+                            <option value="likes">Likes</option>
+                            <option value="lastModified">Recently Updated</option>
+                            <option value="created">Recently Created</option>
+                        </select>
+                    </div>
+                    <div class="filter-bar" style="margin-bottom: 0;">
+                        <button class="filter-btn active" data-search-filter="all">All Types</button>
+                        <button class="filter-btn" data-search-filter="mlx">MLX</button>
+                        <button class="filter-btn" data-search-filter="gguf">GGUF</button>
+                        <button class="filter-btn" data-search-filter="transformers">Transformers</button>
+                    </div>
+                </div>
+
+                <div id="search-results" class="search-results"></div>
+            </div>
+
+            <div class="card">
+                <h2>Direct Download</h2>
+                <div class="form-group">
+                    <label>Enter HuggingFace model ID</label>
+                    <div class="form-row">
+                        <input type="text" id="direct-download" placeholder="e.g., mlx-community/Llama-3.2-3B-Instruct-4bit"
+                               onkeypress="if(event.key === 'Enter') downloadModel(this.value)">
+                        <button onclick="downloadModel(document.getElementById('direct-download').value)">Download</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Tab -->
+        <div id="tab-test" class="tab-content">
+            {% if status.loaded_count > 0 %}
+                <div class="test-layout">
+                    <div class="test-sidebar">
+                        <div class="card" style="margin-bottom: 0;">
+                            <h2>Settings</h2>
+                            <div class="form-group">
+                                <label>Model</label>
+                                <select id="test-model" onchange="setActiveModel(this.value)">
+                                    {% for model in status.loaded_models %}
+                                        <option value="{{ model.id }}" {% if model.is_active %}selected{% endif %}>{{ model.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="toggle-row">
+                                <span class="toggle-label">Streaming</span>
+                                <label class="toggle">
+                                    <input type="checkbox" id="streaming-toggle" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="card" style="margin-bottom: 0;">
+                            <h2>Quick Tests</h2>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                <div class="quick-test" onclick="sendQuickTest('text')">
+                                    <div class="quick-test-title">Text Response</div>
+                                    <div class="quick-test-desc">Simple text generation</div>
+                                </div>
+                                <div class="quick-test" onclick="sendQuickTest('tool')">
+                                    <div class="quick-test-title">Tool Calling</div>
+                                    <div class="quick-test-desc">Test function/tool invocation</div>
+                                </div>
+                                <div class="quick-test" onclick="sendQuickTest('code')">
+                                    <div class="quick-test-title">Code Generation</div>
+                                    <div class="quick-test-desc">Generate sample code</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button onclick="clearChat()" class="btn-secondary" style="width: 100%;">Clear Chat</button>
+                    </div>
+
+                    <div class="test-main">
+                        <div class="card" style="margin-bottom: 0; flex: 1; display: flex; flex-direction: column;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                <h2 style="margin-bottom: 0;">Chat Test</h2>
+                                <span id="active-model-display" style="font-size: 0.875rem; color: var(--text-secondary);">
+                                    {{ status.current_model.name if status.current_model else 'No model' }}
+                                </span>
+                            </div>
+
+                            <div class="chat-container">
+                                <div class="chat-messages" id="chat-messages">
+                                    <div class="empty-state"><p>Send a message to start testing</p></div>
+                                </div>
+                                <div class="chat-input-area">
+                                    <textarea id="chat-input" placeholder="Type a message..."
+                                              onkeypress="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }"></textarea>
+                                    <button onclick="sendMessage()" id="send-btn">Send</button>
+                                </div>
+                            </div>
+
+                            <div class="response-info" id="response-info" style="display: none;">
+                                <div class="response-info-item">
+                                    <span class="response-info-label">Prompt:</span>
+                                    <span class="response-info-value" id="info-prompt-tokens">0</span>
+                                </div>
+                                <div class="response-info-item">
+                                    <span class="response-info-label">Response:</span>
+                                    <span class="response-info-value" id="info-completion-tokens">0</span>
+                                </div>
+                                <div class="response-info-item">
+                                    <span class="response-info-label">Total:</span>
+                                    <span class="response-info-value" id="info-total-tokens">0</span>
+                                </div>
+                                <div class="response-info-item">
+                                    <span class="response-info-label">Speed:</span>
+                                    <span class="response-info-value" id="info-tokens-per-sec">0 tok/s</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% else %}
+                <div class="card">
+                    <div class="empty-state">
+                        <p>Load a model first to test chat</p>
+                        <button onclick="switchTab('models')" style="margin-top: 1rem;">Go to Models</button>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="tab-analytics" class="tab-content">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin-bottom: 0;">Request Analytics</h2>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select id="time-window" onchange="updateAnalytics()" style="width: auto;">
+                            <option value="5">Last 5 minutes</option>
+                            <option value="15">Last 15 minutes</option>
+                            <option value="30">Last 30 minutes</option>
+                            <option value="60" selected>Last hour</option>
+                            <option value="360">Last 6 hours</option>
+                            <option value="1440">Last 24 hours</option>
+                        </select>
+                        <button id="realtime-btn" onclick="toggleRealtime()" class="btn-secondary btn-small">
+                            <span id="realtime-icon">Live</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem;">
+                    <div style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; text-align: center;">
+                        <div style="color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Requests (1h)</div>
+                        <div id="summary-requests-hour" style="font-size: 1.5rem; font-weight: 600;">0</div>
+                    </div>
+                    <div style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; text-align: center;">
+                        <div style="color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Tokens (1h)</div>
+                        <div id="summary-tokens-hour" style="font-size: 1.5rem; font-weight: 600;">0</div>
+                    </div>
+                    <div style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; text-align: center;">
+                        <div style="color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Requests (24h)</div>
+                        <div id="summary-requests-day" style="font-size: 1.5rem; font-weight: 600;">0</div>
+                    </div>
+                    <div style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; text-align: center;">
+                        <div style="color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Tokens (24h)</div>
+                        <div id="summary-tokens-day" style="font-size: 1.5rem; font-weight: 600;">0</div>
+                    </div>
+                </div>
+
+                <div style="height: 300px; position: relative;">
+                    <canvas id="requests-chart"></canvas>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem;">
+                <div class="card" style="flex: 1; min-width: 0;">
+                    <h2>Token Usage</h2>
+                    <div style="height: 250px; position: relative;">
+                        <canvas id="tokens-chart"></canvas>
+                    </div>
+                </div>
+
+                <div class="card" style="flex: 1; min-width: 0;">
+                    <h2>Generation Speed (Tokens/Second)</h2>
+                    <div style="height: 250px; position: relative;">
+                        <canvas id="tps-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="tab-settings" class="tab-content">
+            <div class="card">
+                <h2>API Key</h2>
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem;">
+                    Use this API key to authenticate requests to the OpenAI-compatible endpoints.
+                </p>
+                <div class="form-group">
+                    <label>Current API Key</label>
+                    <div class="form-row">
+                        <input type="password" id="current-api-key" value="{{ api_key }}" readonly style="flex: 1; font-family: monospace;">
+                        <button onclick="toggleApiKeyVisibility()" class="btn-secondary"><span id="toggle-icon">Show</span></button>
+                        <button onclick="copyApiKey()" class="btn-secondary">Copy</button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                    <button onclick="regenerateApiKey()" class="btn-secondary">Regenerate</button>
+                    <button onclick="showCustomKeyForm()" class="btn-secondary">Set Custom</button>
+                </div>
+                <div id="custom-key-form" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                    <div class="form-group">
+                        <label>New API Key (min 8 characters)</label>
+                        <div class="form-row">
+                            <input type="text" id="new-api-key" placeholder="Enter new API key" minlength="8">
+                            <button onclick="setCustomApiKey()">Save</button>
+                            <button onclick="hideCustomKeyForm()" class="btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Models Directory</h2>
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem;">
+                    Path where models are stored. After changing, use "Scan Local" to find models.
+                </p>
+                <div class="form-group">
+                    <div class="form-row">
+                        <input type="text" id="models-dir" value="{{ models_dir }}" placeholder="/path/to/models" style="flex: 1; font-family: monospace;">
+                        <button onclick="setModelsDir()">Save</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Default Model</h2>
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem;">
+                    Model to load automatically when the service starts.
+                </p>
+                <div class="form-group">
+                    <div class="form-row">
+                        <select id="default-model">
+                            <option value="">None</option>
+                            {% for model in models %}
+                                {% if model.status == 'ready' %}
+                                    <option value="{{ model.id }}" {% if settings.default_model == model.id %}selected{% endif %}>{{ model.name }}</option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                        <button onclick="setDefaultModel()">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <!-- Model Configuration Modal -->
+    <div id="config-modal" class="modal-overlay" onclick="if(event.target === this) closeConfigModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Model Configuration</h2>
+                <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="config-model-id">
+
+                <div class="form-group">
+                    <label>Display Name</label>
+                    <input type="text" id="config-display-name" placeholder="Custom display name">
+                    <div class="form-help">Optional friendly name shown in the UI</div>
+                </div>
+
+                <div class="form-group">
+                    <label>System Prompt</label>
+                    <textarea id="config-system-prompt" rows="3" placeholder="Optional default system prompt..."></textarea>
+                    <div class="form-help">Default system message prepended to conversations</div>
+                </div>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <input type="number" id="config-temperature" min="0" max="2" step="0.1" value="0.7">
+                        <div class="form-help">0 = deterministic, 2 = creative</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Tokens</label>
+                        <input type="number" id="config-max-tokens" min="1" max="32768" step="1" value="2048">
+                        <div class="form-help">Maximum response length</div>
+                    </div>
+                </div>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Top P</label>
+                        <input type="number" id="config-top-p" min="0" max="1" step="0.05" value="0.9">
+                        <div class="form-help">Nucleus sampling threshold</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Top K</label>
+                        <input type="number" id="config-top-k" min="1" max="100" step="1" value="50">
+                        <div class="form-help">Top-k sampling limit</div>
+                    </div>
+                </div>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Repetition Penalty</label>
+                        <input type="number" id="config-repetition-penalty" min="1" max="2" step="0.05" value="1.1">
+                        <div class="form-help">1.0 = none, 1.1-1.3 = typical</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Context Length</label>
+                        <input type="number" id="config-context-length" min="512" max="131072" step="512" value="4096">
+                        <div class="form-help">Max context window size</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Stop Sequences</label>
+                    <input type="text" id="config-stop-sequences" placeholder="e.g., </s>, [END], ###">
+                    <div class="form-help">Comma-separated tokens that stop generation</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="resetModelConfig()">Reset to Defaults</button>
+                <button class="btn-secondary" onclick="closeConfigModal()">Cancel</button>
+                <button onclick="saveModelConfig()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+        }
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+        });
+
+        // Model type filtering for available models
+        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const filter = btn.dataset.filter;
+                document.querySelectorAll('#available-models .model-item').forEach(item => {
+                    if (filter === 'all') {
+                        item.style.display = 'flex';
+                    } else if (filter === 'favorites') {
+                        item.style.display = item.dataset.favorite === 'true' ? 'flex' : 'none';
+                    } else {
+                        item.style.display = item.dataset.type === filter ? 'flex' : 'none';
+                    }
+                });
+            });
+        });
+
+        // Search type filtering
+        let currentSearchFilter = 'all';
+        document.querySelectorAll('.filter-btn[data-search-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn[data-search-filter]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentSearchFilter = btn.dataset.searchFilter;
+                // Re-run search with new filter
+                const query = document.getElementById('search-query').value.trim();
+                if (query) searchModels();
+            });
+        });
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast' + (type === 'error' ? ' error' : '');
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function api(method, endpoint, body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            const response = await fetch(endpoint, options);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Request failed');
+            return data;
+        }
+
+        // UI Refresh functions (no page reload)
+        async function refreshLoadedModels() {
+            try {
+                const status = await api('GET', '/api/admin/status');
+                const loadedModels = status.loaded_models || [];
+
+                // Update header badge
+                const headerBadges = document.querySelector('header > div');
+                if (headerBadges) {
+                    const modelBadge = headerBadges.querySelector('.badge-success, .badge-warning');
+                    if (modelBadge) {
+                        if (loadedModels.length > 0) {
+                            modelBadge.className = 'badge badge-success';
+                            modelBadge.textContent = `${loadedModels.length} Model${loadedModels.length > 1 ? 's' : ''} (${status.total_memory_mb} MB)`;
+                        } else {
+                            modelBadge.className = 'badge badge-warning';
+                            modelBadge.textContent = 'No Models Loaded';
+                        }
+                    }
+                }
+
+                // Update Status tab loaded models
+                const statusLoadedList = document.querySelector('#tab-status .model-list');
+                if (statusLoadedList) {
+                    if (loadedModels.length > 0) {
+                        statusLoadedList.innerHTML = loadedModels.map(m => `
+                            <div class="model-item ${m.is_active ? 'active' : ''}">
+                                <div class="model-info">
+                                    <div class="model-name">${m.name} ${m.is_active ? '<span class="badge badge-success" style="margin-left: 0.5rem;">Active</span>' : ''}</div>
+                                    <div class="model-meta">${m.memory_mb} MB</div>
+                                </div>
+                                <div class="actions">
+                                    ${!m.is_active ? `<button onclick="setActiveModel('${m.id}')" class="btn-small btn-secondary">Activate</button>` : ''}
+                                    <button onclick="unloadModel('${m.id}')" class="btn-small btn-danger">Unload</button>
+                                </div>
+                            </div>
+                        `).join('');
+                    } else {
+                        statusLoadedList.innerHTML = '<div class="empty-state"><p>No models loaded</p></div>';
+                    }
+                }
+
+                // Update Models tab loaded models section
+                const modelsTabLoaded = document.querySelector('#tab-models .card:first-child');
+                if (modelsTabLoaded) {
+                    const header = modelsTabLoaded.querySelector('h2');
+                    if (header) header.textContent = `Loaded Models (${status.total_memory_mb} MB)`;
+
+                    const unloadAllBtn = modelsTabLoaded.querySelector('button[onclick="unloadAllModels()"]');
+                    if (unloadAllBtn) unloadAllBtn.style.display = loadedModels.length > 0 ? 'inline-block' : 'none';
+
+                    const modelList = modelsTabLoaded.querySelector('.model-list');
+                    if (modelList) {
+                        if (loadedModels.length > 0) {
+                            modelList.innerHTML = loadedModels.map(m => `
+                                <div class="model-item ${m.is_active ? 'active' : ''}">
+                                    <div class="model-info">
+                                        <div class="model-name">${m.name} ${m.is_active ? '<span class="badge badge-success" style="margin-left: 0.5rem;">Active</span>' : ''}</div>
+                                        <div class="model-meta">
+                                            <span class="badge badge-${m.model_type}">${m.model_type.toUpperCase()}</span>
+                                            ${m.memory_mb} MB
+                                        </div>
+                                    </div>
+                                    <div class="actions">
+                                        ${!m.is_active ? `<button onclick="setActiveModel('${m.id}')" class="btn-small btn-secondary">Activate</button>` : ''}
+                                        <button onclick="unloadModel('${m.id}')" class="btn-small btn-danger">Unload</button>
+                                    </div>
+                                </div>
+                            `).join('');
+                        } else {
+                            modelList.innerHTML = '<div class="empty-state"><p>No models loaded</p></div>';
+                        }
+                    }
+                }
+
+                // Update Test tab model selector
+                const testModelSelect = document.getElementById('test-model');
+                if (testModelSelect) {
+                    testModelSelect.innerHTML = loadedModels.map(m =>
+                        `<option value="${m.id}" ${m.is_active ? 'selected' : ''}>${m.name}</option>`
+                    ).join('');
+                }
+
+                // Update active model display
+                const activeDisplay = document.getElementById('active-model-display');
+                if (activeDisplay) {
+                    const activeModel = loadedModels.find(m => m.is_active);
+                    activeDisplay.textContent = activeModel ? activeModel.name : 'No model';
+                }
+            } catch (err) { console.error('Failed to refresh loaded models:', err); }
+        }
+
+        async function refreshAvailableModels() {
+            try {
+                const data = await api('GET', '/api/admin/models?status=ready');
+                const models = data.models || [];
+
+                const container = document.getElementById('available-models');
+                if (!container) return;
+
+                if (models.length > 0) {
+                    container.innerHTML = models.map(m => `
+                        <div class="model-item" data-type="${m.model_type}" data-favorite="${m.favorite ? 'true' : 'false'}">
+                            <button class="btn-favorite ${m.favorite ? 'active' : ''}" onclick="toggleFavorite('${m.id}', this)" title="Toggle favorite">
+                                ${m.favorite ? '★' : '☆'}
+                            </button>
+                            <div class="model-info">
+                                <div class="model-name">${m.name}</div>
+                                <div class="model-meta">
+                                    <span class="badge badge-${m.model_type}">${m.model_type.toUpperCase()}</span>
+                                    ${m.capabilities?.thinking ? '<span class="badge badge-thinking">Thinking</span>' : ''}
+                                    ${m.capabilities?.tool_use ? '<span class="badge badge-tools">Tools</span>' : ''}
+                                    ${m.quantization || ''}
+                                </div>
+                            </div>
+                            <div class="actions">
+                                <button onclick="openConfigModal('${m.id}')" class="btn-secondary btn-small">Config</button>
+                                <button onclick="loadModel('${m.id}')" class="btn-small">Load</button>
+                                <button onclick="deleteModel('${m.id}', '${m.name}')" class="btn-danger btn-small">Delete</button>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    // Re-apply current filter
+                    const activeFilter = document.querySelector('.filter-btn[data-filter].active');
+                    if (activeFilter && activeFilter.dataset.filter !== 'all') {
+                        const filter = activeFilter.dataset.filter;
+                        container.querySelectorAll('.model-item').forEach(item => {
+                            if (filter === 'favorites') {
+                                item.style.display = item.dataset.favorite === 'true' ? 'flex' : 'none';
+                            } else {
+                                item.style.display = item.dataset.type === filter ? 'flex' : 'none';
+                            }
+                        });
+                    }
+                } else {
+                    container.innerHTML = '<div class="empty-state"><p>No models available</p><p style="font-size: 0.875rem;">Download models or scan your local directory</p></div>';
+                }
+            } catch (err) { console.error('Failed to refresh available models:', err); }
+        }
+
+        // Favorite toggle
+        async function toggleFavorite(modelId, btn) {
+            try {
+                const data = await api('POST', `/api/admin/models/${modelId}/favorite`);
+                const isFavorite = data.favorite;
+
+                // Update button appearance
+                btn.classList.toggle('active', isFavorite);
+                btn.textContent = isFavorite ? '★' : '☆';
+
+                // Update data attribute on parent
+                const modelItem = btn.closest('.model-item');
+                if (modelItem) {
+                    modelItem.dataset.favorite = isFavorite ? 'true' : 'false';
+                }
+
+                // If currently filtering by favorites and this was unfavorited, hide it
+                const activeFilter = document.querySelector('.filter-btn[data-filter].active');
+                if (activeFilter?.dataset.filter === 'favorites' && !isFavorite) {
+                    modelItem.style.display = 'none';
+                }
+            } catch (err) {
+                showToast('Error toggling favorite: ' + err.message, 'error');
+            }
+        }
+
+        // Model management
+        async function loadModel(modelId) {
+            showToast('Loading model...');
+            try {
+                await api('POST', '/api/admin/models/load', { model_id: modelId });
+                showToast('Model loaded');
+                await refreshLoadedModels();
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function unloadModel(modelId) {
+            try {
+                await api('POST', '/api/admin/models/unload', { model_id: modelId });
+                showToast('Model unloaded');
+                await refreshLoadedModels();
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function unloadAllModels() {
+            if (!confirm('Unload all models?')) return;
+            try {
+                await api('POST', '/api/admin/models/unload-all');
+                showToast('All models unloaded');
+                await refreshLoadedModels();
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function setActiveModel(modelId) {
+            try {
+                await api('POST', '/api/admin/models/set-active', { model_id: modelId });
+                showToast('Model activated');
+                await refreshLoadedModels();
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function deleteModel(modelId, modelName) {
+            if (!confirm(`Delete ${modelName}?`)) return;
+            try {
+                await api('DELETE', `/api/admin/models/${modelId}`);
+                showToast('Model deleted');
+                await refreshAvailableModels();
+                await refreshLoadedModels();
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function scanLocalModels() {
+            showToast('Scanning...');
+            try {
+                const data = await api('POST', '/api/admin/models/scan');
+                if (data.registered > 0) {
+                    showToast(`Found ${data.registered} new model(s)`);
+                    await refreshAvailableModels();
+                } else { showToast('No new models found'); }
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        // Model configuration modal
+        async function openConfigModal(modelId) {
+            try {
+                const config = await api('GET', `/api/admin/models/${modelId}/config`);
+
+                document.getElementById('config-model-id').value = modelId;
+                document.getElementById('config-display-name').value = config.display_name || '';
+                document.getElementById('config-system-prompt').value = config.system_prompt || '';
+                document.getElementById('config-temperature').value = config.temperature ?? 0.7;
+                document.getElementById('config-max-tokens').value = config.max_tokens ?? 2048;
+                document.getElementById('config-top-p').value = config.top_p ?? 0.9;
+                document.getElementById('config-top-k').value = config.top_k ?? 50;
+                document.getElementById('config-repetition-penalty').value = config.repetition_penalty ?? 1.1;
+                document.getElementById('config-context-length').value = config.context_length ?? 4096;
+                document.getElementById('config-stop-sequences').value = (config.stop_sequences || []).join(', ');
+
+                document.getElementById('config-modal').classList.add('active');
+            } catch (err) {
+                showToast('Error loading config: ' + err.message, 'error');
+            }
+        }
+
+        function closeConfigModal() {
+            document.getElementById('config-modal').classList.remove('active');
+        }
+
+        async function saveModelConfig() {
+            const modelId = document.getElementById('config-model-id').value;
+            const stopSeqStr = document.getElementById('config-stop-sequences').value;
+            const stopSequences = stopSeqStr ? stopSeqStr.split(',').map(s => s.trim()).filter(s => s) : [];
+
+            const config = {
+                display_name: document.getElementById('config-display-name').value || null,
+                system_prompt: document.getElementById('config-system-prompt').value || null,
+                temperature: parseFloat(document.getElementById('config-temperature').value),
+                max_tokens: parseInt(document.getElementById('config-max-tokens').value),
+                top_p: parseFloat(document.getElementById('config-top-p').value),
+                top_k: parseInt(document.getElementById('config-top-k').value),
+                repetition_penalty: parseFloat(document.getElementById('config-repetition-penalty').value),
+                context_length: parseInt(document.getElementById('config-context-length').value),
+                stop_sequences: stopSequences,
+            };
+
+            try {
+                await api('PUT', `/api/admin/models/${modelId}/config`, config);
+                showToast('Configuration saved');
+                closeConfigModal();
+                await refreshAvailableModels();
+            } catch (err) {
+                showToast('Error saving config: ' + err.message, 'error');
+            }
+        }
+
+        async function resetModelConfig() {
+            const modelId = document.getElementById('config-model-id').value;
+            if (!confirm('Reset all settings to defaults?')) return;
+
+            try {
+                await api('DELETE', `/api/admin/models/${modelId}/config`);
+                showToast('Configuration reset');
+                closeConfigModal();
+            } catch (err) {
+                showToast('Error resetting config: ' + err.message, 'error');
+            }
+        }
+
+        // Search and download
+        async function searchModels() {
+            const query = document.getElementById('search-query').value.trim();
+            if (!query) { showToast('Enter a search query', 'error'); return; }
+
+            const sort = document.getElementById('search-sort').value;
+            const modelType = currentSearchFilter === 'all' ? null : currentSearchFilter;
+
+            const resultsDiv = document.getElementById('search-results');
+            resultsDiv.innerHTML = '<div class="loading"><span class="spinner"></span> Searching...</div>';
+            try {
+                const data = await api('POST', '/api/admin/models/search', {
+                    query,
+                    limit: 50,
+                    sort,
+                    model_type: modelType
+                });
+                if (!data.results || data.results.length === 0) {
+                    resultsDiv.innerHTML = '<div class="empty-state">No models found</div>';
+                    return;
+                }
+                resultsDiv.innerHTML = data.results.map(model => {
+                    const hfUrl = `https://huggingface.co/${model.id}`;
+                    const typeBadge = model.model_type ? `<span class="badge badge-${model.model_type === 'transformers' ? 'vllm' : model.model_type}">${model.model_type.toUpperCase()}</span>` : '';
+                    const thinkingBadge = model.capabilities?.thinking ? '<span class="badge badge-thinking">Thinking</span>' : '';
+                    const toolsBadge = model.capabilities?.tool_use ? '<span class="badge badge-tools">Tools</span>' : '';
+                    const lastModified = model.last_modified ? new Date(model.last_modified).toLocaleDateString() : null;
+                    const stats = [
+                        `↓ ${model.downloads?.toLocaleString() || 'N/A'}`,
+                        `♥ ${model.likes?.toLocaleString() || 'N/A'}`,
+                        lastModified ? `Updated: ${lastModified}` : null
+                    ].filter(Boolean).join(' | ');
+
+                    return `
+                        <div class="search-result">
+                            <div class="search-result-info">
+                                <div class="search-result-name">
+                                    <a href="${hfUrl}" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">${model.id}</a>
+                                    <span style="margin-left: 0.5rem;">${typeBadge} ${thinkingBadge} ${toolsBadge}</span>
+                                </div>
+                                <div class="search-result-stats">${stats}</div>
+                            </div>
+                            <button onclick="downloadModel('${model.id}')" class="btn-small">Download</button>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) { resultsDiv.innerHTML = `<div class="empty-state" style="color: var(--error);">Error: ${err.message}</div>`; }
+        }
+
+        // Track active downloads (session only - downloads persist server-side)
+        const activeDownloads = new Map(); // repoId -> EventSource
+
+        async function downloadModel(repoId) {
+            if (!repoId) return;
+            if (activeDownloads.has(repoId)) {
+                showToast('Already downloading this model', 'error');
+                return;
+            }
+
+            try {
+                updateDownloadButton(repoId, true);
+
+                const data = await api('POST', '/api/admin/models/download', { repo_id: repoId });
+
+                if (data.status === 'already_downloaded') {
+                    showToast('Model already downloaded');
+                    updateDownloadButton(repoId, false);
+                    await refreshAvailableModels();
+                } else if (data.status === 'downloading') {
+                    // Show download progress card and start polling
+                    showDownloadProgress(repoId, data.model_id);
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+                updateDownloadButton(repoId, false);
+            }
+        }
+
+        function updateDownloadButton(repoId, isDownloading) {
+            const buttons = document.querySelectorAll(`button[onclick="downloadModel('${repoId}')"]`);
+            buttons.forEach(btn => {
+                if (isDownloading) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="spinner"></span>';
+                    btn.title = 'Downloading...';
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = 'Download';
+                    btn.title = '';
+                }
+            });
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function showDownloadProgress(repoId, modelId) {
+            const container = document.getElementById('toast-container');
+
+            // Create progress card
+            const card = document.createElement('div');
+            card.className = 'toast';
+            card.id = `download-${modelId}`;
+            card.style.minWidth = '300px';
+            card.innerHTML = `
+                <div style="margin-bottom: 0.5rem;">
+                    <div style="font-weight: 500; margin-bottom: 0.25rem;">Downloading</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); word-break: break-all;">${repoId}</div>
+                </div>
+                <div class="memory-bar" style="height: 8px; margin-bottom: 0.5rem;">
+                    <div class="memory-bar-fill" id="progress-bar-${modelId}" style="width: 0%; background: var(--accent);"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary);">
+                    <span id="progress-text-${modelId}">Starting...</span>
+                    <span id="progress-percent-${modelId}">0%</span>
+                </div>
+            `;
+            container.appendChild(card);
+
+            // Use Server-Sent Events for real-time progress updates
+            const eventSource = new EventSource(`/api/admin/models/downloads/${modelId}/stream`);
+
+            eventSource.onmessage = async (event) => {
+                try {
+                    const progress = JSON.parse(event.data);
+                    updateDownloadProgress(modelId, progress);
+
+                    if (progress.status === 'complete') {
+                        eventSource.close();
+                        activeDownloads.delete(repoId);
+                        showToast(`Download complete: ${repoId}`);
+                        removeDownloadCard(modelId);
+                        updateDownloadButton(repoId, false);
+                        await refreshAvailableModels();
+                    } else if (progress.status === 'error') {
+                        eventSource.close();
+                        activeDownloads.delete(repoId);
+                        showToast(`Download failed: ${repoId}`, 'error');
+                        removeDownloadCard(modelId);
+                        updateDownloadButton(repoId, false);
+                    }
+                } catch (err) {
+                    console.error('Error parsing SSE data:', err);
+                }
+            };
+
+            eventSource.onerror = (err) => {
+                // EventSource will automatically try to reconnect
+                // Only close if the download is no longer active
+                if (!activeDownloads.has(repoId)) {
+                    eventSource.close();
+                }
+            };
+
+            // Store the EventSource so we can close it if needed
+            activeDownloads.set(repoId, eventSource);
+        }
+
+        function updateDownloadProgress(modelId, progress) {
+            const bar = document.getElementById(`progress-bar-${modelId}`);
+            const text = document.getElementById(`progress-text-${modelId}`);
+            const percent = document.getElementById(`progress-percent-${modelId}`);
+
+            if (bar) bar.style.width = `${progress.percent || 0}%`;
+            if (percent) percent.textContent = `${Math.round(progress.percent || 0)}%`;
+
+            if (text) {
+                if (progress.total_bytes > 0) {
+                    text.textContent = `${formatBytes(progress.downloaded_bytes || 0)} / ${formatBytes(progress.total_bytes)}`;
+                } else if (progress.current_file) {
+                    text.textContent = progress.current_file.split('/').pop();
+                } else {
+                    text.textContent = progress.status || 'Downloading...';
+                }
+            }
+        }
+
+        function removeDownloadCard(modelId) {
+            const card = document.getElementById(`download-${modelId}`);
+            if (card) card.remove();
+        }
+
+        // Check for any active downloads on page load
+        async function checkActiveDownloads() {
+            try {
+                const response = await fetch('/api/admin/models/downloads');
+                if (response.ok) {
+                    const data = await response.json();
+                    const downloads = data.downloads || {};
+
+                    // Only show progress for downloads that have actual progress data
+                    for (const [modelId, progress] of Object.entries(downloads)) {
+                        if (progress && (progress.status === 'downloading' || progress.status === 'starting')) {
+                            const repoId = modelId.replace('--', '/');
+                            if (!activeDownloads.has(repoId)) {
+                                showDownloadProgress(repoId, modelId);
+                                updateDownloadButton(repoId, true);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                // Silently fail
+            }
+        }
+
+        // Check for active downloads on page load (only if there are any)
+        checkActiveDownloads();
+
+        // Settings
+        function toggleApiKeyVisibility() {
+            const input = document.getElementById('current-api-key');
+            const icon = document.getElementById('toggle-icon');
+            input.type = input.type === 'password' ? 'text' : 'password';
+            icon.textContent = input.type === 'password' ? 'Show' : 'Hide';
+        }
+
+        function copyApiKey() {
+            navigator.clipboard.writeText(document.getElementById('current-api-key').value)
+                .then(() => showToast('API key copied'))
+                .catch(() => showToast('Failed to copy', 'error'));
+        }
+
+        async function regenerateApiKey() {
+            if (!confirm('Regenerate API key?')) return;
+            try {
+                const data = await api('POST', '/api/admin/api-key/regenerate');
+                document.getElementById('current-api-key').value = data.api_key;
+                showToast('API key regenerated');
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        function showCustomKeyForm() { document.getElementById('custom-key-form').style.display = 'block'; }
+        function hideCustomKeyForm() { document.getElementById('custom-key-form').style.display = 'none'; }
+
+        async function setCustomApiKey() {
+            const newKey = document.getElementById('new-api-key').value;
+            if (!newKey || newKey.length < 8) { showToast('API key must be at least 8 characters', 'error'); return; }
+            try {
+                const data = await api('POST', '/api/admin/api-key', { api_key: newKey });
+                document.getElementById('current-api-key').value = data.api_key;
+                hideCustomKeyForm();
+                showToast('API key updated');
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function setModelsDir() {
+            const path = document.getElementById('models-dir').value.trim();
+            if (!path) { showToast('Enter a path', 'error'); return; }
+            try {
+                const data = await api('POST', '/api/admin/models-dir', { path });
+                document.getElementById('models-dir').value = data.path;
+                showToast('Models directory updated');
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        async function setDefaultModel() {
+            const modelId = document.getElementById('default-model').value;
+            try {
+                await api('POST', '/api/admin/settings', { key: 'default_model', value: modelId });
+                showToast('Default model saved');
+            } catch (err) { showToast('Error: ' + err.message, 'error'); }
+        }
+
+        // Chat functionality
+        let chatMessages = [];
+        let lastResponseInfo = null;
+
+        function clearChat() {
+            chatMessages = [];
+            document.getElementById('chat-messages').innerHTML = '<div class="empty-state"><p>Send a message to start testing</p></div>';
+            document.getElementById('response-info').style.display = 'none';
+        }
+
+        function addMessage(role, content) {
+            chatMessages.push({ role, content });
+            const container = document.getElementById('chat-messages');
+            const emptyState = container.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `chat-message ${role}`;
+            msgDiv.innerHTML = `<div class="chat-message-role">${role}</div><div class="chat-message-content"></div>`;
+            msgDiv.querySelector('.chat-message-content').textContent = content;
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+            return msgDiv;
+        }
+
+        function updateResponseInfo(promptTokens, completionTokens, durationMs) {
+            const totalTokens = promptTokens + completionTokens;
+            const tokensPerSec = durationMs > 0 ? (completionTokens / (durationMs / 1000)).toFixed(1) : 0;
+
+            document.getElementById('info-prompt-tokens').textContent = promptTokens;
+            document.getElementById('info-completion-tokens').textContent = completionTokens;
+            document.getElementById('info-total-tokens').textContent = totalTokens;
+            document.getElementById('info-tokens-per-sec').textContent = tokensPerSec + ' tok/s';
+            document.getElementById('response-info').style.display = 'flex';
+        }
+
+        const quickTests = {
+            text: "Hello! Please respond with a brief, friendly greeting and tell me one interesting fact about language models.",
+            tool: `You have access to a function called "get_weather" that takes a "location" parameter. The user wants to know the weather in Paris. Please call this function with the appropriate argument.
+
+Respond in the following JSON format:
+{"function_call": {"name": "get_weather", "arguments": {"location": "Paris"}}}`,
+            code: "Write a simple Python function that calculates the factorial of a number. Include a docstring and an example usage."
+        };
+
+        function sendQuickTest(type) {
+            const input = document.getElementById('chat-input');
+            input.value = quickTests[type];
+            sendMessage();
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const content = input.value.trim();
+            if (!content) return;
+
+            input.value = '';
+            addMessage('user', content);
+
+            const sendBtn = document.getElementById('send-btn');
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="spinner"></span>';
+
+            const streaming = document.getElementById('streaming-toggle')?.checked ?? true;
+            const startTime = Date.now();
+
+            try {
+                if (streaming) {
+                    // Streaming response
+                    const response = await fetch('/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer {{ api_key }}' },
+                        body: JSON.stringify({ messages: chatMessages, stream: true })
+                    });
+
+                    if (!response.ok) {
+                        const err = await response.json();
+                        throw new Error(err.error?.message || 'Request failed');
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let assistantContent = '';
+                    const msgDiv = addMessage('assistant', '');
+                    const contentDiv = msgDiv.querySelector('.chat-message-content');
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
+
+                        for (const line of lines) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') continue;
+                            try {
+                                const parsed = JSON.parse(data);
+                                const delta = parsed.choices?.[0]?.delta?.content || '';
+                                assistantContent += delta;
+                                contentDiv.textContent = assistantContent;
+                                document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
+                            } catch {}
+                        }
+                    }
+
+                    chatMessages[chatMessages.length - 1].content = assistantContent;
+                    const durationMs = Date.now() - startTime;
+                    // Estimate tokens (rough approximation)
+                    const promptTokens = Math.ceil(content.length / 4);
+                    const completionTokens = Math.ceil(assistantContent.length / 4);
+                    updateResponseInfo(promptTokens, completionTokens, durationMs);
+                } else {
+                    // Non-streaming response
+                    const response = await fetch('/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer {{ api_key }}' },
+                        body: JSON.stringify({ messages: chatMessages, stream: false })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error?.message || 'Request failed');
+
+                    const assistantMessage = data.choices?.[0]?.message?.content || 'No response';
+                    addMessage('assistant', assistantMessage);
+
+                    const durationMs = Date.now() - startTime;
+                    const usage = data.usage || {};
+                    updateResponseInfo(usage.prompt_tokens || 0, usage.completion_tokens || 0, durationMs);
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+                chatMessages.pop();
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send';
+            }
+        }
+
+        // Analytics
+        let requestsChart = null;
+        let tokensChart = null;
+        let tpsChart = null;
+        let realtimeEventSource = null;
+        let isRealtime = false;
+
+        const chartColors = {
+            requests: { bg: 'rgba(59, 130, 246, 0.2)', border: 'rgb(59, 130, 246)' },
+            prompt: { bg: 'rgba(34, 197, 94, 0.2)', border: 'rgb(34, 197, 94)' },
+            completion: { bg: 'rgba(168, 85, 247, 0.2)', border: 'rgb(168, 85, 247)' },
+            tpsMin: { bg: 'rgba(239, 68, 68, 0.1)', border: 'rgb(239, 68, 68)' },
+            tpsAvg: { bg: 'rgba(251, 191, 36, 0.2)', border: 'rgb(251, 191, 36)' },
+            tpsMax: { bg: 'rgba(34, 197, 94, 0.1)', border: 'rgb(34, 197, 94)' }
+        };
+
+        function initCharts() {
+            const requestsCtx = document.getElementById('requests-chart');
+            const tokensCtx = document.getElementById('tokens-chart');
+            const tpsCtx = document.getElementById('tps-chart');
+            if (!requestsCtx || !tokensCtx || !tpsCtx) return;
+
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                plugins: { legend: { display: true, labels: { color: '#94a3b8' } } },
+                scales: {
+                    x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', maxRotation: 0 } },
+                    y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                }
+            };
+
+            requestsChart = new Chart(requestsCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Requests',
+                        data: [],
+                        backgroundColor: chartColors.requests.bg,
+                        borderColor: chartColors.requests.border,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: chartOptions
+            });
+
+            tokensChart = new Chart(tokensCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Prompt Tokens',
+                            data: [],
+                            backgroundColor: chartColors.prompt.bg,
+                            borderColor: chartColors.prompt.border,
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        },
+                        {
+                            label: 'Completion Tokens',
+                            data: [],
+                            backgroundColor: chartColors.completion.bg,
+                            borderColor: chartColors.completion.border,
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: chartOptions
+            });
+
+            tpsChart = new Chart(tpsCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Max tok/s',
+                            data: [],
+                            backgroundColor: chartColors.tpsMax.bg,
+                            borderColor: chartColors.tpsMax.border,
+                            borderWidth: 2,
+                            fill: false,
+                            tension: 0.3
+                        },
+                        {
+                            label: 'Avg tok/s',
+                            data: [],
+                            backgroundColor: chartColors.tpsAvg.bg,
+                            borderColor: chartColors.tpsAvg.border,
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        },
+                        {
+                            label: 'Min tok/s',
+                            data: [],
+                            backgroundColor: chartColors.tpsMin.bg,
+                            borderColor: chartColors.tpsMin.border,
+                            borderWidth: 2,
+                            fill: false,
+                            tension: 0.3,
+                            borderDash: [5, 5]
+                        }
+                    ]
+                },
+                options: chartOptions
+            });
+        }
+
+        async function updateAnalytics() {
+            if (isRealtime) return; // Don't update when in realtime mode
+
+            const minutes = parseInt(document.getElementById('time-window').value);
+            try {
+                const [histData, summaryData] = await Promise.all([
+                    api('GET', `/api/admin/metrics/historical?minutes=${minutes}`),
+                    api('GET', '/api/admin/metrics/summary')
+                ]);
+
+                // Update summary
+                document.getElementById('summary-requests-hour').textContent = summaryData.last_hour.requests.toLocaleString();
+                document.getElementById('summary-tokens-hour').textContent = (summaryData.last_hour.prompt_tokens + summaryData.last_hour.completion_tokens).toLocaleString();
+                document.getElementById('summary-requests-day').textContent = summaryData.last_24h.requests.toLocaleString();
+                document.getElementById('summary-tokens-day').textContent = (summaryData.last_24h.prompt_tokens + summaryData.last_24h.completion_tokens).toLocaleString();
+
+                // Update charts
+                const data = histData.data || [];
+                const labels = data.map(d => {
+                    const date = new Date(d.timestamp * 1000);
+                    return minutes <= 60 ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                         : date.toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' });
+                });
+
+                if (requestsChart && tokensChart && tpsChart) {
+                    requestsChart.data.labels = labels;
+                    requestsChart.data.datasets[0].data = data.map(d => d.requests);
+                    requestsChart.update('none');
+
+                    tokensChart.data.labels = labels;
+                    tokensChart.data.datasets[0].data = data.map(d => d.prompt_tokens);
+                    tokensChart.data.datasets[1].data = data.map(d => d.completion_tokens);
+                    tokensChart.update('none');
+
+                    tpsChart.data.labels = labels;
+                    tpsChart.data.datasets[0].data = data.map(d => d.tps_max);
+                    tpsChart.data.datasets[1].data = data.map(d => d.tps_avg);
+                    tpsChart.data.datasets[2].data = data.map(d => d.tps_min);
+                    tpsChart.update('none');
+                }
+            } catch (err) {
+                console.error('Failed to update analytics:', err);
+            }
+        }
+
+        function toggleRealtime() {
+            const btn = document.getElementById('realtime-btn');
+            const icon = document.getElementById('realtime-icon');
+
+            if (isRealtime) {
+                // Stop realtime
+                isRealtime = false;
+                if (realtimeEventSource) {
+                    realtimeEventSource.close();
+                    realtimeEventSource = null;
+                }
+                btn.classList.remove('active');
+                btn.style.background = '';
+                icon.textContent = 'Live';
+                document.getElementById('time-window').disabled = false;
+                updateAnalytics();
+            } else {
+                // Start realtime
+                isRealtime = true;
+                btn.classList.add('active');
+                btn.style.background = 'var(--success)';
+                icon.textContent = 'Live';
+                document.getElementById('time-window').disabled = true;
+
+                // Switch to realtime per-second data
+                startRealtimeStream();
+            }
+        }
+
+        function startRealtimeStream() {
+            realtimeEventSource = new EventSource('/api/admin/metrics/stream');
+
+            let realtimeData = [];
+            const maxPoints = 60;
+
+            realtimeEventSource.onmessage = (event) => {
+                try {
+                    const point = JSON.parse(event.data);
+                    realtimeData.push(point);
+                    if (realtimeData.length > maxPoints) realtimeData.shift();
+
+                    const labels = realtimeData.map(d => {
+                        const date = new Date(d.timestamp * 1000);
+                        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    });
+
+                    if (requestsChart && tokensChart && tpsChart) {
+                        requestsChart.data.labels = labels;
+                        requestsChart.data.datasets[0].data = realtimeData.map(d => d.requests);
+                        requestsChart.update('none');
+
+                        tokensChart.data.labels = labels;
+                        tokensChart.data.datasets[0].data = realtimeData.map(d => d.prompt_tokens);
+                        tokensChart.data.datasets[1].data = realtimeData.map(d => d.completion_tokens);
+                        tokensChart.update('none');
+
+                        tpsChart.data.labels = labels;
+                        tpsChart.data.datasets[0].data = realtimeData.map(d => d.tps_max);
+                        tpsChart.data.datasets[1].data = realtimeData.map(d => d.tps_avg);
+                        tpsChart.data.datasets[2].data = realtimeData.map(d => d.tps_min);
+                        tpsChart.update('none');
+                    }
+                } catch (err) {
+                    console.error('Error parsing realtime data:', err);
+                }
+            };
+
+            realtimeEventSource.onerror = () => {
+                if (isRealtime) {
+                    // Try to reconnect
+                    setTimeout(() => {
+                        if (isRealtime && !realtimeEventSource) {
+                            startRealtimeStream();
+                        }
+                    }, 2000);
+                }
+            };
+        }
+
+        // Initialize analytics when tab is shown
+        document.querySelector('[data-tab="analytics"]')?.addEventListener('click', () => {
+            if (!requestsChart) {
+                setTimeout(() => {
+                    initCharts();
+                    updateAnalytics();
+                }, 100);
+            } else {
+                updateAnalytics();
+            }
+        });
+    </script>
+</body>
+</html>
