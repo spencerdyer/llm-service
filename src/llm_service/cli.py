@@ -1,5 +1,15 @@
 """CLI entry point for LLM Service."""
 
+import os
+import sys
+
+# Force unbuffered output and proper TTY detection for progress bars
+# Must be set before importing libraries that cache TTY state
+os.environ.setdefault('PYTHONUNBUFFERED', '1')
+if sys.stdout.isatty():
+    # Ensure tqdm and huggingface_hub detect TTY properly
+    os.environ.setdefault('FORCE_COLOR', '1')
+
 import typer
 from rich.console import Console
 

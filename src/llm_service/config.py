@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Model settings
     default_model: Optional[str] = None
     max_model_len: int = 4096
-    gpu_memory_utilization: float = 0.9  # For vLLM
+    gpu_memory_utilization: float = 0.85  # For vLLM - leave headroom for display/other GPU processes
 
     @property
     def effective_models_dir(self) -> Path:

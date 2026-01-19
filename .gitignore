@@ -34,6 +34,7 @@ ENV/
 # Nix
 result
 result-*
+.nix-nvidia-libs/
 
 # Project data
 data/

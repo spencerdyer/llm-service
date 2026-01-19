@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -458,12 +460,59 @@ class ModelManager:
         # Download the model
         try:
             def _download():
-                return snapshot_download(
-                    repo_id,
-                    revision=revision,
-                    local_dir=str(local_path),
-                    tqdm_class=self._create_progress_tracker(model_id),
-                )
+                # Patch tqdm at multiple levels to ensure proper inline progress display
+                # This fixes the issue where progress bars print new lines in threaded contexts
+                import functools
+                from tqdm.auto import tqdm as original_tqdm
+
+                # Capture these in the closure for the thread context
+                _sys = sys
+                _os = os
+
+                @functools.wraps(original_tqdm)
+                def inline_tqdm(*args, **kwargs):
+                    # Force settings that ensure inline updates work in threads
+                    if 'file' not in kwargs:
+                        kwargs['file'] = _sys.stderr
+                    kwargs['leave'] = True
+                    kwargs['dynamic_ncols'] = True
+                    kwargs['mininterval'] = 0.1
+                    # Ensure ncols is set if terminal detection fails in thread
+                    if 'ncols' not in kwargs:
+                        try:
+                            kwargs['ncols'] = _os.get_terminal_size().columns
+                        except OSError:
+                            kwargs['ncols'] = 100
+                    return original_tqdm(*args, **kwargs)
+
+                # Patch tqdm in all places huggingface_hub might import it from
+                patches = []
+                modules_to_patch = [
+                    'huggingface_hub.file_download',
+                    'huggingface_hub.utils._tqdm',
+                    'huggingface_hub._commit_api',
+                ]
+
+                for mod_name in modules_to_patch:
+                    try:
+                        mod = __import__(mod_name, fromlist=['tqdm'])
+                        if hasattr(mod, 'tqdm'):
+                            patches.append((mod, 'tqdm', getattr(mod, 'tqdm')))
+                            setattr(mod, 'tqdm', inline_tqdm)
+                    except (ImportError, AttributeError):
+                        pass
+
+                try:
+                    return snapshot_download(
+                        repo_id,
+                        revision=revision,
+                        local_dir=str(local_path),
+                        tqdm_class=self._create_progress_tracker(model_id),
+                    )
+                finally:
+                    # Restore original tqdm functions
+                    for mod, attr, original in patches:
+                        setattr(mod, attr, original)
 
             await asyncio.to_thread(_download)
 
