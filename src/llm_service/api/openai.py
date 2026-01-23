@@ -298,8 +298,12 @@ async def _stream_chat_completion(
     estimated_prompt_tokens: int = 0
 ):
     """Stream chat completion chunks."""
+    import asyncio
+
     total_text = ""
     start_time = time.time()
+    client_disconnected = False
+
     try:
         async for chunk in backend_manager.generate_stream(request):
             if chunk.text:
@@ -321,19 +325,34 @@ async def _stream_chat_completion(
 
         yield "data: [DONE]\n\n"
 
-        # Record metrics
-        if metrics_service:
-            estimated_completion_tokens = max(1, len(total_text) // 4)
-            duration = time.time() - start_time
-            tokens_per_second = estimated_completion_tokens / duration if duration > 0 else 0
-            await metrics_service.record_request(
-                prompt_tokens=estimated_prompt_tokens,
-                completion_tokens=estimated_completion_tokens,
-                tokens_per_second=tokens_per_second,
-            )
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnected - this is expected, not an error
+        client_disconnected = True
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+        # Connection errors - client disconnected
+        client_disconnected = True
     except Exception as e:
-        error_data = {"error": {"message": str(e), "type": "server_error"}}
-        yield f"data: {json.dumps(error_data)}\n\n"
+        # Other errors - try to send error to client if still connected
+        try:
+            error_data = {"error": {"message": str(e), "type": "server_error"}}
+            yield f"data: {json.dumps(error_data)}\n\n"
+        except Exception:
+            # Client already disconnected, ignore
+            client_disconnected = True
+    finally:
+        # Record metrics even if client disconnected (we still did the work)
+        if metrics_service and total_text:
+            try:
+                estimated_completion_tokens = max(1, len(total_text) // 4)
+                duration = time.time() - start_time
+                tokens_per_second = estimated_completion_tokens / duration if duration > 0 else 0
+                await metrics_service.record_request(
+                    prompt_tokens=estimated_prompt_tokens,
+                    completion_tokens=estimated_completion_tokens,
+                    tokens_per_second=tokens_per_second,
+                )
+            except Exception:
+                pass  # Don't crash on metrics errors
 
 
 @router.post("/completions")
@@ -453,8 +472,12 @@ async def _stream_completion(
     estimated_prompt_tokens: int = 0
 ):
     """Stream completion chunks."""
+    import asyncio
+
     total_text = ""
     start_time = time.time()
+    client_disconnected = False
+
     try:
         async for chunk in backend_manager.generate_stream(request):
             if chunk.text:
@@ -476,16 +499,31 @@ async def _stream_completion(
 
         yield "data: [DONE]\n\n"
 
-        # Record metrics
-        if metrics_service:
-            estimated_completion_tokens = max(1, len(total_text) // 4)
-            duration = time.time() - start_time
-            tokens_per_second = estimated_completion_tokens / duration if duration > 0 else 0
-            await metrics_service.record_request(
-                prompt_tokens=estimated_prompt_tokens,
-                completion_tokens=estimated_completion_tokens,
-                tokens_per_second=tokens_per_second,
-            )
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnected - this is expected, not an error
+        client_disconnected = True
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+        # Connection errors - client disconnected
+        client_disconnected = True
     except Exception as e:
-        error_data = {"error": {"message": str(e), "type": "server_error"}}
-        yield f"data: {json.dumps(error_data)}\n\n"
+        # Other errors - try to send error to client if still connected
+        try:
+            error_data = {"error": {"message": str(e), "type": "server_error"}}
+            yield f"data: {json.dumps(error_data)}\n\n"
+        except Exception:
+            # Client already disconnected, ignore
+            client_disconnected = True
+    finally:
+        # Record metrics even if client disconnected (we still did the work)
+        if metrics_service and total_text:
+            try:
+                estimated_completion_tokens = max(1, len(total_text) // 4)
+                duration = time.time() - start_time
+                tokens_per_second = estimated_completion_tokens / duration if duration > 0 else 0
+                await metrics_service.record_request(
+                    prompt_tokens=estimated_prompt_tokens,
+                    completion_tokens=estimated_completion_tokens,
+                    tokens_per_second=tokens_per_second,
+                )
+            except Exception:
+                pass  # Don't crash on metrics errors

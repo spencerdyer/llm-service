@@ -306,6 +306,7 @@ class MLXBackend(BaseBackend):
         import threading
 
         token_queue: queue.Queue[Optional[str]] = queue.Queue()
+        stop_flag = threading.Event()
 
         def _stream_generate():
             from mlx_lm.generate import stream_generate
@@ -331,10 +332,11 @@ class MLXBackend(BaseBackend):
                     sampler=sampler,
                     logits_processors=logits_processors if logits_processors else None,
                 ):
+                    if stop_flag.is_set():
+                        break
                     token_queue.put(response.text)
-            except Exception as e:
-                token_queue.put(None)
-                raise e
+            except Exception:
+                pass  # Generation interrupted, this is fine
             finally:
                 token_queue.put(None)
 
@@ -343,18 +345,25 @@ class MLXBackend(BaseBackend):
             thread = threading.Thread(target=_stream_generate)
             thread.start()
 
-            while True:
-                try:
-                    token = await asyncio.to_thread(token_queue.get, timeout=30)
-                    if token is None:
-                        yield StreamChunk(text="", finish_reason="stop")
+            try:
+                while True:
+                    try:
+                        token = await asyncio.to_thread(token_queue.get, timeout=30)
+                        if token is None:
+                            yield StreamChunk(text="", finish_reason="stop")
+                            break
+                        yield StreamChunk(text=token)
+                    except queue.Empty:
+                        yield StreamChunk(text="", finish_reason="timeout")
                         break
-                    yield StreamChunk(text=token)
-                except queue.Empty:
-                    yield StreamChunk(text="", finish_reason="timeout")
-                    break
-
-            thread.join(timeout=1)
+            except (asyncio.CancelledError, GeneratorExit):
+                # Client disconnected - signal thread to stop and clean up
+                stop_flag.set()
+                raise
+            finally:
+                # Ensure thread is cleaned up
+                stop_flag.set()
+                thread.join(timeout=2)
 
     def get_model_info(self) -> dict:
         """Get model information."""
