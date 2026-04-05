@@ -86,15 +86,31 @@ class BackendManager:
         """Get all loaded models."""
         return [lm.model for lm in self._loaded_models.values()]
 
-    def _create_backend(self, model: ModelInfo) -> BaseBackend:
-        """Create the appropriate backend for the model."""
+    async def _create_backend(self, model: ModelInfo) -> BaseBackend:
+        """Create the appropriate backend for the model.
+
+        Reads per-model config (context_length) from the config database so
+        backends like GGUF can allocate the right KV-cache size.
+        """
+        # Fetch configured context length (falls back to a generous default)
+        ctx_len: int = settings.max_model_len  # global default from config.py
+        try:
+            model_config = await self.config_manager.get_model_config(model.id)
+            if model_config and model_config.get("context_length"):
+                ctx_len = int(model_config["context_length"])
+        except Exception:
+            pass
+
+        if model.model_type == ModelType.GGUF:
+            from llm_service.backends.gguf_backend import GGUFBackend
+
+            return GGUFBackend(str(model.local_path), n_ctx=ctx_len)
+
         if settings.is_mac:
-            # Use MLX on Mac (with batching support)
             from llm_service.backends.mlx_backend import MLXBackend
 
             return MLXBackend(str(model.local_path))
         else:
-            # Use vLLM on Linux
             from llm_service.backends.vllm_backend import VLLMBackend
 
             return VLLMBackend(str(model.local_path), quantization=model.quantization)
@@ -120,6 +136,11 @@ class BackendManager:
                 f"Model '{model_id_or_source}' not found. Download it first via the admin panel."
             )
 
+        if model.metadata.get("experimental"):
+            raise ValueError(
+                f"Model '{model.name}' is still experimental. Promote it from the workbench before loading it for inference."
+            )
+
         if model.status != ModelStatus.READY:
             raise ValueError(f"Model '{model.name}' is not ready (status: {model.status})")
 
@@ -129,7 +150,7 @@ class BackendManager:
             return model
 
         # Create and load backend
-        backend = self._create_backend(model)
+        backend = await self._create_backend(model)
         await backend.load()
 
         loaded = LoadedModel(model, backend)

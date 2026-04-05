@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from llm_service.config import settings
 from llm_service.services.model_manager import ModelStatus
@@ -63,8 +63,26 @@ class ModelConfigRequest(BaseModel):
     top_p: float = 0.9
     top_k: int = 50
     repetition_penalty: float = 1.1
-    context_length: int = 4096
+    context_length: int = 8192
     stop_sequences: list[str] = []
+
+
+class OperationModeRequest(BaseModel):
+    mode: str
+
+
+class WorkbenchAbliterationRequest(BaseModel):
+    base_model_id: str
+    derived_name: Optional[str] = None
+    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    prompt_count: int = Field(default=6, ge=2, le=6)
+
+
+class WorkbenchEvaluationRequest(BaseModel):
+    model_id: str
+    baseline_model_id: Optional[str] = None
+    prompt_suite: Optional[str] = None
+    prompt_text: Optional[str] = None
 
 
 # --- Helper Functions ---
@@ -82,6 +100,34 @@ def get_config_manager(request: Request):
     return request.app.state.config_manager
 
 
+def get_training_manager(request: Request):
+    return request.app.state.training_manager
+
+
+def get_evaluation_manager(request: Request):
+    return request.app.state.evaluation_manager
+
+
+def get_operation_mode(request: Request) -> str:
+    return getattr(request.app.state, "operation_mode", "inference")
+
+
+def require_inference_mode(request: Request) -> None:
+    if get_operation_mode(request) != "inference":
+        raise HTTPException(
+            status_code=409,
+            detail="This action is unavailable while the app is in workbench mode",
+        )
+
+
+def require_workbench_mode(request: Request) -> None:
+    if get_operation_mode(request) != "workbench":
+        raise HTTPException(
+            status_code=409,
+            detail="Switch the app to workbench mode to use this feature",
+        )
+
+
 # --- Admin UI Routes ---
 
 
@@ -92,10 +138,14 @@ async def admin_dashboard(request: Request):
     backend_manager = get_backend_manager(request)
     model_manager = get_model_manager(request)
     config_manager = get_config_manager(request)
+    training_manager = get_training_manager(request)
+    evaluation_manager = get_evaluation_manager(request)
 
     models = await model_manager.list_models()
     status = backend_manager.get_status()
     all_settings = await config_manager.get_all_settings()
+    workbench_payload = await training_manager.get_dashboard_payload()
+    evaluation_runs = await evaluation_manager.list_evaluations()
 
     # Get current API key
     current_api_key = getattr(request.app.state, "api_key", None)
@@ -110,6 +160,10 @@ async def admin_dashboard(request: Request):
             "platform": settings.platform.value,
             "api_key": current_api_key,
             "models_dir": str(model_manager.models_dir),
+            "operation_mode": get_operation_mode(request),
+            "workbench": workbench_payload,
+            "evaluation_runs": evaluation_runs,
+            "prompt_suites": evaluation_manager.get_prompt_suites(),
         },
     )
 
@@ -121,7 +175,153 @@ async def admin_dashboard(request: Request):
 async def get_status(request: Request):
     """Get current service status."""
     backend_manager = get_backend_manager(request)
-    return backend_manager.get_status()
+    status = backend_manager.get_status()
+    status["operation_mode"] = get_operation_mode(request)
+    status["workbench_locked"] = status["operation_mode"] == "workbench"
+    return status
+
+
+@api_router.get("/mode")
+async def get_mode(request: Request):
+    """Get the current app operation mode."""
+    return {"mode": get_operation_mode(request)}
+
+
+@api_router.post("/mode")
+async def set_mode(request: Request, body: OperationModeRequest):
+    """Switch between inference and workbench modes."""
+    training_manager = get_training_manager(request)
+    backend_manager = get_backend_manager(request)
+
+    try:
+        mode = await training_manager.switch_mode(body.mode, backend_manager)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    request.app.state.operation_mode = mode
+    return {"status": "updated", "mode": mode}
+
+
+@api_router.get("/workbench/overview")
+async def get_workbench_overview(request: Request):
+    """Return workbench mode data for the dashboard."""
+    training_manager = get_training_manager(request)
+    evaluation_manager = get_evaluation_manager(request)
+    payload = await training_manager.get_dashboard_payload()
+    payload["evaluations"] = await evaluation_manager.list_evaluations()
+    payload["prompt_suites"] = evaluation_manager.get_prompt_suites()
+    return payload
+
+
+@api_router.post("/workbench/jobs/copy-abliterate")
+async def create_copy_abliterate_job(request: Request, body: WorkbenchAbliterationRequest):
+    """Create a copied model and start an abliteration job."""
+    require_workbench_mode(request)
+    training_manager = get_training_manager(request)
+    try:
+        job = await training_manager.start_copy_abliterate_job(
+            base_model_id=body.base_model_id,
+            derived_name=body.derived_name,
+            strength=body.strength,
+            prompt_count=body.prompt_count,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return job
+
+
+@api_router.get("/workbench/jobs")
+async def list_workbench_jobs(request: Request):
+    """List recent workbench jobs."""
+    training_manager = get_training_manager(request)
+    return {"jobs": await training_manager.list_jobs()}
+
+
+@api_router.get("/workbench/jobs/{job_id}")
+async def get_workbench_job(request: Request, job_id: str):
+    """Get a single workbench job."""
+    training_manager = get_training_manager(request)
+    job = await training_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Workbench job not found")
+    return job
+
+
+@api_router.get("/workbench/jobs/{job_id}/stream")
+async def stream_workbench_job(request: Request, job_id: str):
+    """Stream workbench job status and recent logs."""
+    training_manager = get_training_manager(request)
+
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+
+            job = await training_manager.get_job(job_id)
+            if not job:
+                yield f"data: {json.dumps({'status': 'error', 'detail': 'Workbench job not found'})}\n\n"
+                break
+
+            yield f"data: {json.dumps(job)}\n\n"
+            if job["status"] in {"complete", "error"}:
+                break
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@api_router.post("/workbench/evaluations")
+async def create_workbench_evaluation(request: Request, body: WorkbenchEvaluationRequest):
+    """Create a new workbench evaluation run."""
+    require_workbench_mode(request)
+    evaluation_manager = get_evaluation_manager(request)
+    try:
+        run = await evaluation_manager.start_evaluation(
+            model_id=body.model_id,
+            baseline_model_id=body.baseline_model_id,
+            prompt_suite=body.prompt_suite,
+            prompt_text=body.prompt_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return run
+
+
+@api_router.get("/workbench/evaluations")
+async def list_workbench_evaluations(request: Request):
+    """List evaluation runs."""
+    evaluation_manager = get_evaluation_manager(request)
+    return {"evaluations": await evaluation_manager.list_evaluations()}
+
+
+@api_router.get("/workbench/evaluations/{evaluation_id}")
+async def get_workbench_evaluation(request: Request, evaluation_id: str):
+    """Get one evaluation run."""
+    evaluation_manager = get_evaluation_manager(request)
+    run = await evaluation_manager.get_evaluation(evaluation_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Evaluation run not found")
+    return run
+
+
+@api_router.post("/workbench/models/{model_id}/promote")
+async def promote_workbench_model(request: Request, model_id: str):
+    """Promote an experimental model into normal inference availability."""
+    require_workbench_mode(request)
+    training_manager = get_training_manager(request)
+    try:
+        model = await training_manager.promote_model(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "promoted", "model": model}
 
 
 @api_router.get("/models")
@@ -359,6 +559,7 @@ async def delete_model(request: Request, model_id: str):
 @api_router.post("/models/load")
 async def load_model(request: Request, body: LoadModelRequest):
     """Load a model for inference."""
+    require_inference_mode(request)
     backend_manager = get_backend_manager(request)
 
     try:
@@ -397,6 +598,7 @@ async def unload_all_models(request: Request):
 @api_router.post("/models/set-active")
 async def set_active_model(request: Request, body: SetActiveModelRequest):
     """Set the active model for generation."""
+    require_inference_mode(request)
     backend_manager = get_backend_manager(request)
 
     if backend_manager.set_active_model(body.model_id):
@@ -443,7 +645,7 @@ async def get_model_config(request: Request, model_id: str):
         "top_p": 0.9,
         "top_k": 50,
         "repetition_penalty": 1.1,
-        "context_length": 4096,
+        "context_length": 8192,
         "stop_sequences": [],
     }
 

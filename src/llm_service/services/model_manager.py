@@ -18,6 +18,7 @@ from llm_service.config import settings
 class ModelStatus(str, Enum):
     PENDING = "pending"
     DOWNLOADING = "downloading"
+    TRAINING = "training"
     READY = "ready"
     ERROR = "error"
 
@@ -73,6 +74,7 @@ class ModelInfo:
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
+        promotion_state = self.metadata.get("promotion_state")
         return {
             "id": self.id,
             "name": self.name,
@@ -84,6 +86,9 @@ class ModelInfo:
             "metadata": self.metadata,
             "capabilities": self.capabilities,
             "favorite": self.metadata.get("favorite", False),
+            "experimental": self.metadata.get("experimental", False),
+            "promotion_state": promotion_state,
+            "is_promoted": promotion_state == "promoted" or not self.metadata.get("experimental", False),
         }
 
     @classmethod
@@ -120,6 +125,8 @@ class ModelManager:
     async def initialize(self) -> None:
         """Initialize the model manager."""
         self._db = await aiosqlite.connect(self.db_path)
+        await self._db.execute("PRAGMA foreign_keys = ON")
+        await self._db.execute("PRAGMA journal_mode = WAL")
 
         # Check for custom models directory in settings
         if self._config_manager:
@@ -131,6 +138,7 @@ class ModelManager:
 
         # Clean up stale downloads from previous sessions
         await self._cleanup_stale_downloads()
+        await self._cleanup_stale_training_models()
 
     async def _cleanup_stale_downloads(self) -> None:
         """Reset models stuck in 'downloading' status from previous sessions."""
@@ -141,6 +149,22 @@ class ModelManager:
             WHERE status = ?
             """,
             (ModelStatus.ERROR.value, ModelStatus.DOWNLOADING.value),
+        )
+        await self._db.commit()
+
+    async def _cleanup_stale_training_models(self) -> None:
+        """Reset experimental models stuck in training status from previous sessions."""
+        await self._db.execute(
+            """
+            UPDATE models
+            SET status = ?,
+                metadata = json_set(
+                    json_set(COALESCE(metadata, '{}'), '$.stale_training', true),
+                    '$.error', 'Training job interrupted by service restart'
+                )
+            WHERE status = ?
+            """,
+            (ModelStatus.ERROR.value, ModelStatus.TRAINING.value),
         )
         await self._db.commit()
 
@@ -601,6 +625,11 @@ class ModelManager:
                 models.append(ModelInfo.from_row(row))
         return models
 
+    async def list_inference_models(self) -> list[ModelInfo]:
+        """List models eligible for normal inference usage."""
+        models = await self.list_models(status=ModelStatus.READY)
+        return [model for model in models if not model.metadata.get("experimental")]
+
     async def delete_model(self, model_id: str) -> bool:
         """Delete a model."""
         model = await self.get_model(model_id)
@@ -617,6 +646,70 @@ class ModelManager:
         await self._db.execute("DELETE FROM models WHERE id = ?", (model_id,))
         await self._db.commit()
         return True
+
+    def build_derived_model_id(self, base_model_id: str, derivation_type: str) -> str:
+        """Build a unique ID for an experimental derived model."""
+        sanitized = derivation_type.replace("_", "-")
+        return f"{base_model_id}--{sanitized}-{int(asyncio.get_running_loop().time() * 1000)}"
+
+    async def create_derived_model(
+        self,
+        base_model: ModelInfo,
+        model_id: str,
+        name: str,
+        derivation_type: str,
+        local_path: Path,
+        job_id: str,
+    ) -> ModelInfo:
+        """Create and persist an experimental derived model record."""
+        model = ModelInfo(
+            id=model_id,
+            name=name,
+            source=f"local/{model_id}",
+            local_path=local_path,
+            model_type=base_model.model_type,
+            quantization=base_model.quantization,
+            status=ModelStatus.TRAINING,
+            metadata={
+                "experimental": True,
+                "promotion_state": "experimental",
+                "parent_model_id": base_model.id,
+                "parent_source": base_model.source,
+                "derivation_type": derivation_type,
+                "job_id": job_id,
+            },
+        )
+        await self._save_model(model)
+        return model
+
+    async def mark_model_error(self, model_id: str, error: str) -> None:
+        """Mark a model as errored with metadata."""
+        model = await self.get_model(model_id)
+        if not model:
+            return
+        model.status = ModelStatus.ERROR
+        model.metadata["error"] = error
+        await self._save_model(model)
+
+    async def mark_model_ready(self, model_id: str) -> Optional[ModelInfo]:
+        """Mark a derived model as ready once validation succeeds."""
+        model = await self.get_model(model_id)
+        if not model:
+            return None
+        model.status = ModelStatus.READY
+        model.metadata.pop("error", None)
+        await self._save_model(model)
+        return model
+
+    async def promote_model(self, model_id: str) -> Optional[ModelInfo]:
+        """Promote an experimental model for normal inference use."""
+        model = await self.get_model(model_id)
+        if not model:
+            return None
+        model.metadata["experimental"] = False
+        model.metadata["promotion_state"] = "promoted"
+        await self._save_model(model)
+        return model
 
     def get_download_progress(self, model_id: str) -> Optional[dict]:
         """Get download progress for a model."""
@@ -644,11 +737,13 @@ class ModelManager:
             return ModelType.MLX, quant
 
         # Check for GGUF models
-        if any(f.endswith(".gguf") for f in files):
+        gguf_files = [f for f in files if f.endswith(".gguf")]
+        if gguf_files:
             quant = None
-            for q in ["q4_k_m", "q4_0", "q5_k_m", "q5_0", "q8_0", "q6_k"]:
-                if q in dir_name:
-                    quant = q
+            search_text = dir_name + " " + " ".join(f.lower() for f in gguf_files)
+            for q in ["q4_k_m", "q5_k_m", "q6_k", "q8_0", "q4_0", "q5_0"]:
+                if q in search_text:
+                    quant = q.upper()
                     break
             return ModelType.GGUF, quant
 

@@ -135,13 +135,14 @@
             if [ "$LLM_SERVICE_PLATFORM" = "darwin" ]; then
               echo "Installing MLX packages for Mac..."
               pip install -q mlx mlx-lm 2>/dev/null || echo "Note: Install mlx-lm manually if needed"
+              CMAKE_ARGS="-DGGML_METAL=on" pip install -q llama-cpp-python 2>/dev/null || echo "Note: Install llama-cpp-python manually if needed"
             else
               echo "Installing vLLM for Linux..."
               pip install -q vllm 2>/dev/null || echo "Note: Install vllm manually if needed"
             fi
 
-            # Install the project in editable mode
-            pip install -q -e . 2>/dev/null || true
+            # Install the project in editable mode with workbench extras
+            pip install -q -e ".[workbench]" 2>/dev/null || true
 
             echo ""
             echo "Commands:"

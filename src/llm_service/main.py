@@ -12,8 +12,10 @@ from llm_service.api import admin, openai
 from llm_service.config import settings
 from llm_service.services.backend_manager import BackendManager
 from llm_service.services.config_manager import ConfigManager
+from llm_service.services.evaluation_manager import EvaluationManager
 from llm_service.services.metrics import MetricsService
 from llm_service.services.model_manager import ModelManager
+from llm_service.services.training_manager import TrainingManager
 
 
 @asynccontextmanager
@@ -32,6 +34,22 @@ async def lifespan(app: FastAPI):
         model_manager=app.state.model_manager,
         config_manager=app.state.config_manager,
     )
+
+    app.state.training_manager = TrainingManager(
+        config_manager=app.state.config_manager,
+        model_manager=app.state.model_manager,
+    )
+    await app.state.training_manager.initialize()
+
+    app.state.evaluation_manager = EvaluationManager(
+        config_manager=app.state.config_manager,
+        model_manager=app.state.model_manager,
+    )
+    await app.state.evaluation_manager.initialize()
+
+    await app.state.config_manager.fail_stale_workbench_jobs()
+    await app.state.config_manager.fail_stale_evaluations()
+    app.state.operation_mode = await app.state.config_manager.get_operation_mode()
 
     app.state.metrics_service = MetricsService()
     await app.state.metrics_service.initialize()
@@ -59,7 +77,7 @@ async def lifespan(app: FastAPI):
 
     # Load default model if configured
     default_model = await app.state.config_manager.get_setting("default_model")
-    if default_model:
+    if default_model and app.state.operation_mode == "inference":
         try:
             await app.state.backend_manager.load_model(default_model)
         except Exception as e:
@@ -70,6 +88,8 @@ async def lifespan(app: FastAPI):
     # Cleanup
     await app.state.metrics_service.close()
     await app.state.backend_manager.shutdown()
+    await app.state.model_manager.close()
+    await app.state.config_manager.close()
 
 
 app = FastAPI(

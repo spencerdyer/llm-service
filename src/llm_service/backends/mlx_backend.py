@@ -1,6 +1,7 @@
 """MLX backend for Apple Silicon Macs with continuous batching support."""
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from llm_service.backends.base import (
     CompletionResponse,
     StreamChunk,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Batching configuration
@@ -305,8 +308,10 @@ class MLXBackend(BaseBackend):
         import queue
         import threading
 
-        token_queue: queue.Queue[Optional[str]] = queue.Queue()
+        _STREAM_ERROR = object()
+        token_queue: queue.Queue = queue.Queue()
         stop_flag = threading.Event()
+        thread_error: list[BaseException] = []
 
         def _stream_generate():
             from mlx_lm.generate import stream_generate
@@ -335,8 +340,12 @@ class MLXBackend(BaseBackend):
                     if stop_flag.is_set():
                         break
                     token_queue.put(response.text)
-            except Exception:
-                pass  # Generation interrupted, this is fine
+            except Exception as exc:
+                if not stop_flag.is_set():
+                    logger.error("MLX stream_generate failed: %s", exc, exc_info=True)
+                    thread_error.append(exc)
+                    token_queue.put(_STREAM_ERROR)
+                    return
             finally:
                 token_queue.put(None)
 
@@ -349,6 +358,11 @@ class MLXBackend(BaseBackend):
                 while True:
                     try:
                         token = await asyncio.to_thread(token_queue.get, timeout=30)
+                        if token is _STREAM_ERROR:
+                            err = thread_error[0] if thread_error else RuntimeError("Unknown")
+                            raise RuntimeError(
+                                f"MLX generation failed mid-stream: {err}"
+                            ) from err
                         if token is None:
                             yield StreamChunk(text="", finish_reason="stop")
                             break

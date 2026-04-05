@@ -52,6 +52,9 @@
         .badge-gguf { background: #f97316; color: #000; }
         .badge-thinking { background: #ec4899; color: #fff; }
         .badge-tools { background: #10b981; color: #fff; }
+        .badge-mode { background: #6366f1; color: #fff; }
+        .badge-experimental { background: #f59e0b; color: #000; }
+        .badge-promoted { background: #22c55e; color: #000; }
 
         .tabs {
             display: flex; gap: 0.25rem; margin-bottom: 1.5rem;
@@ -69,6 +72,17 @@
         }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        .tab.mode-disabled { opacity: 0.5; }
+
+        .mode-switcher {
+            display: flex; gap: 0.75rem; align-items: center;
+            margin-bottom: 1rem; padding: 1rem 1.25rem;
+            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 0.5rem;
+        }
+        .mode-switcher-text { flex: 1; }
+        .mode-switcher-text p { color: var(--text-secondary); font-size: 0.875rem; }
+        .mode-actions { display: flex; gap: 0.5rem; }
+        .mode-actions button.active { background: var(--success); color: #000; }
 
         .card {
             background: var(--bg-secondary); border-radius: 0.5rem; padding: 1.5rem;
@@ -198,6 +212,23 @@
         .memory-bar-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
 
         .empty-state { text-align: center; padding: 2rem; color: var(--text-secondary); }
+        .log-tail {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 0.375rem;
+            padding: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75rem; white-space: pre-wrap; max-height: 240px; overflow-y: auto;
+        }
+        .job-item, .evaluation-item {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 0.375rem;
+            padding: 1rem; margin-bottom: 0.75rem;
+        }
+        .job-item:last-child, .evaluation-item:last-child { margin-bottom: 0; }
+        .job-header, .evaluation-header {
+            display: flex; justify-content: space-between; gap: 1rem; align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .muted { color: var(--text-secondary); font-size: 0.8rem; }
+        .workbench-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; }
+        @media (max-width: 1000px) { .workbench-grid { grid-template-columns: 1fr; } }
 
         .toast {
             position: fixed; bottom: 1rem; right: 1rem; padding: 1rem 1.5rem;
@@ -264,6 +295,7 @@
             <h1>LLM Service Admin</h1>
             <div>
                 <span class="badge badge-info">{{ platform }}</span>
+                <span class="badge badge-mode" id="mode-badge">{{ operation_mode | upper }}</span>
                 {% if status.loaded_count > 0 %}
                     <span class="badge badge-success">{{ status.loaded_count }} Model{{ 's' if status.loaded_count > 1 else '' }} ({{ status.total_memory_mb }} MB)</span>
                 {% else %}
@@ -272,10 +304,28 @@
             </div>
         </header>
 
+        <div class="mode-switcher">
+            <div class="mode-switcher-text">
+                <div style="font-weight: 600;">Operation Mode</div>
+                <p id="mode-description">
+                    {% if operation_mode == 'workbench' %}
+                        Workbench mode blocks normal `/v1/*` inference so you can safely copy, abliterate, and evaluate experimental models.
+                    {% else %}
+                        Inference mode keeps the regular serving path active. Switch to workbench mode for copied model experiments.
+                    {% endif %}
+                </p>
+            </div>
+            <div class="mode-actions">
+                <button id="mode-inference-btn" class="{% if operation_mode == 'inference' %}active{% endif %}" onclick="setOperationMode('inference')">Inference</button>
+                <button id="mode-workbench-btn" class="{% if operation_mode == 'workbench' %}active{% endif %}" onclick="setOperationMode('workbench')">Workbench</button>
+            </div>
+        </div>
+
         <div class="tabs">
             <button class="tab active" data-tab="status">Status</button>
             <button class="tab" data-tab="models">Models</button>
             <button class="tab" data-tab="download">Download</button>
+            <button class="tab" data-tab="workbench">Workbench</button>
             <button class="tab" data-tab="analytics">Analytics</button>
             <button class="tab" data-tab="test">Test</button>
             <button class="tab" data-tab="settings">Settings</button>
@@ -293,6 +343,10 @@
                     <div class="status-item">
                         <span class="status-label">Platform</span>
                         <span class="status-value">{{ status.platform }}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Mode</span>
+                        <span class="status-value" id="status-mode-value">{{ operation_mode }}</span>
                     </div>
                     <div class="status-item">
                         <span class="status-label">Loaded Models</span>
@@ -389,9 +443,10 @@
                 </div>
 
                 <div class="model-list" id="available-models">
-                    {% set ready_models = models | selectattr('status', 'equalto', 'ready') | list %}
-                    {% if ready_models %}
-                        {% for model in ready_models %}
+                    {% set ns = namespace(has_inference_models=false) %}
+                    {% for model in models %}
+                        {% if model.status == 'ready' and not model.experimental %}
+                            {% set ns.has_inference_models = true %}
                             <div class="model-item" data-type="{{ model.model_type }}" data-favorite="{{ 'true' if model.favorite else 'false' }}">
                                 <button class="btn-favorite {{ 'active' if model.favorite else '' }}" onclick="toggleFavorite('{{ model.id }}', this)" title="Toggle favorite">
                                     {{ '★' if model.favorite else '☆' }}
@@ -411,8 +466,9 @@
                                     <button onclick="deleteModel('{{ model.id }}', '{{ model.name }}')" class="btn-danger btn-small">Delete</button>
                                 </div>
                             </div>
-                        {% endfor %}
-                    {% else %}
+                        {% endif %}
+                    {% endfor %}
+                    {% if not ns.has_inference_models %}
                         <div class="empty-state">
                             <p>No models available</p>
                             <p style="font-size: 0.875rem;">Download models or scan your local directory</p>
@@ -468,9 +524,152 @@
             </div>
         </div>
 
+        <!-- Workbench Tab -->
+        <div id="tab-workbench" class="tab-content">
+            <div class="workbench-grid">
+                <div>
+                    <div class="card">
+                        <h2>Abliteration Workflow</h2>
+                        <p class="muted" style="margin-bottom: 1rem;">
+                            Pick a compatible base model, create a safe copy, then run abliteration against the copy. The original model is never modified in place.
+                        </p>
+                        <div class="form-group">
+                            <label>Base Model</label>
+                            <select id="workbench-base-model">
+                                {% for model in workbench.base_models %}
+                                    <option value="{{ model.id }}">{{ model.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Derived Model Name</label>
+                            <input type="text" id="workbench-derived-name" placeholder="Optional custom name">
+                        </div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label>Abliteration Strength</label>
+                                <input type="number" id="workbench-strength" min="0" max="2" step="0.1" value="1.0">
+                            </div>
+                            <div class="form-group">
+                                <label>Prompt Pairs</label>
+                                <input type="number" id="workbench-prompt-count" min="2" max="6" step="1" value="6">
+                            </div>
+                        </div>
+                        <button id="start-abliteration-btn" onclick="startAbliterationJob()">Copy For Abliteration</button>
+                    </div>
+
+                    <div class="card">
+                        <h2>Experimental Models</h2>
+                        <div id="experimental-models">
+                            {% if workbench.experimental_models %}
+                                {% for model in workbench.experimental_models %}
+                                    <div class="model-item">
+                                        <div class="model-info">
+                                            <div class="model-name">{{ model.name }} <span class="badge badge-experimental">Experimental</span></div>
+                                            <div class="model-meta">{{ model.id }}</div>
+                                        </div>
+                                        <div class="actions">
+                                            <button onclick="promoteWorkbenchModel('{{ model.id }}')" class="btn-small">Promote</button>
+                                        </div>
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="empty-state"><p>No experimental models yet</p></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="card">
+                        <h2>Workbench Jobs</h2>
+                        <div id="workbench-jobs">
+                            {% if workbench.jobs %}
+                                {% for job in workbench.jobs %}
+                                    <div class="job-item">
+                                        <div class="job-header">
+                                            <div>
+                                                <div style="font-weight: 600;">{{ job.job_type }}</div>
+                                                <div class="muted">{{ job.base_model_id }} → {{ job.derived_model_id }}</div>
+                                            </div>
+                                            <span class="badge {% if job.status == 'complete' %}badge-success{% elif job.status == 'error' %}badge-error{% else %}badge-warning{% endif %}">{{ job.status }}</span>
+                                        </div>
+                                        <div class="muted" style="margin-bottom: 0.75rem;">Stage: {{ job.progress.stage if job.progress else 'queued' }}</div>
+                                        <div class="log-tail">{{ job.log_tail | join('\n') if job.log_tail else 'No log output yet.' }}</div>
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="empty-state"><p>No workbench jobs yet</p></div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Evaluate Experimental Models</h2>
+                        <div class="form-group">
+                            <label>Experimental Model</label>
+                            <select id="evaluation-model">
+                                {% for model in workbench.experimental_models %}
+                                    <option value="{{ model.id }}">{{ model.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Baseline Model</label>
+                            <select id="evaluation-baseline-model">
+                                <option value="">None</option>
+                                {% for model in workbench.base_models %}
+                                    <option value="{{ model.id }}">{{ model.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Prompt Suite</label>
+                            <select id="evaluation-prompt-suite">
+                                {% for suite in prompt_suites %}
+                                    <option value="{{ suite.id }}">{{ suite.name }} ({{ suite.prompt_count }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Or Custom Prompt</label>
+                            <textarea id="evaluation-prompt-text" rows="3" placeholder="Leave blank to use the selected prompt suite"></textarea>
+                        </div>
+                        <button onclick="startEvaluation()">Run Evaluation</button>
+
+                        <div id="evaluation-runs" style="margin-top: 1rem;">
+                            {% if evaluation_runs %}
+                                {% for run in evaluation_runs %}
+                                    <div class="evaluation-item">
+                                        <div class="evaluation-header">
+                                            <div>
+                                                <div style="font-weight: 600;">{{ run.model_id }}</div>
+                                                <div class="muted">{{ run.prompt_suite }}</div>
+                                            </div>
+                                            <span class="badge {% if run.status == 'complete' %}badge-success{% elif run.status == 'error' %}badge-error{% else %}badge-warning{% endif %}">{{ run.status }}</span>
+                                        </div>
+                                        <div class="log-tail">{{ run.log_tail | join('\n') if run.log_tail else 'No evaluation log yet.' }}</div>
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="empty-state"><p>No evaluations yet</p></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Test Tab -->
         <div id="tab-test" class="tab-content">
-            {% if status.loaded_count > 0 %}
+            {% if operation_mode == 'workbench' %}
+                <div class="card">
+                    <div class="empty-state">
+                        <p>Normal `/v1/*` inference is disabled while the app is in workbench mode.</p>
+                        <p style="font-size: 0.875rem;">Switch back to inference mode to use the regular test chat.</p>
+                    </div>
+                </div>
+            {% elif status.loaded_count > 0 %}
                 <div class="test-layout">
                     <div class="test-sidebar">
                         <div class="card" style="margin-bottom: 0;">
@@ -679,7 +878,7 @@
                         <select id="default-model">
                             <option value="">None</option>
                             {% for model in models %}
-                                {% if model.status == 'ready' %}
+                                {% if model.status == 'ready' and not model.experimental %}
                                     <option value="{{ model.id }}" {% if settings.default_model == model.id %}selected{% endif %}>{{ model.name }}</option>
                                 {% endif %}
                             {% endfor %}
@@ -769,6 +968,11 @@
     </div>
 
     <script>
+        let currentOperationMode = '{{ operation_mode }}';
+        const promptSuites = {{ prompt_suites | tojson }};
+        let modeMutationId = 0;
+        let modeTransitionInFlight = false;
+
         // Tab switching
         function switchTab(tabId) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -829,11 +1033,72 @@
             return data;
         }
 
+        function updateOperationModeUI(mode) {
+            currentOperationMode = mode;
+            document.getElementById('mode-badge').textContent = mode.toUpperCase();
+            const inferenceBtn = document.getElementById('mode-inference-btn');
+            const workbenchBtn = document.getElementById('mode-workbench-btn');
+            inferenceBtn?.classList.toggle('active', mode === 'inference');
+            workbenchBtn?.classList.toggle('active', mode === 'workbench');
+            if (inferenceBtn) inferenceBtn.disabled = modeTransitionInFlight;
+            if (workbenchBtn) workbenchBtn.disabled = modeTransitionInFlight;
+
+            const description = document.getElementById('mode-description');
+            if (description) {
+                description.textContent = mode === 'workbench'
+                    ? 'Workbench mode blocks normal /v1/* inference so you can safely copy, abliterate, and evaluate experimental models.'
+                    : 'Inference mode keeps the regular serving path active. Switch to workbench mode for copied model experiments.';
+            }
+
+            const testTab = document.querySelector('[data-tab="test"]');
+            if (testTab) {
+                testTab.classList.toggle('mode-disabled', mode === 'workbench');
+            }
+
+            document.querySelectorAll('button[onclick^="loadModel("], button[onclick^="setActiveModel("]').forEach(btn => {
+                btn.disabled = mode === 'workbench';
+            });
+            const sendBtn = document.getElementById('send-btn');
+            if (sendBtn) {
+                sendBtn.disabled = mode === 'workbench';
+            }
+        }
+
+        async function setOperationMode(mode) {
+            if (mode === currentOperationMode || modeTransitionInFlight) return;
+
+            const mutationId = ++modeMutationId;
+            modeTransitionInFlight = true;
+            updateOperationModeUI(currentOperationMode);
+            try {
+                const data = await api('POST', '/api/admin/mode', { mode });
+                if (mutationId !== modeMutationId) return;
+                updateOperationModeUI(data.mode);
+                showToast(`Switched to ${data.mode} mode`);
+                await refreshLoadedModels();
+                await refreshAvailableModels();
+                await refreshWorkbenchOverview();
+            } catch (err) {
+                if (mutationId !== modeMutationId) return;
+                showToast('Error: ' + err.message, 'error');
+            } finally {
+                if (mutationId === modeMutationId) {
+                    modeTransitionInFlight = false;
+                    updateOperationModeUI(currentOperationMode);
+                }
+            }
+        }
+
         // UI Refresh functions (no page reload)
         async function refreshLoadedModels() {
+            const refreshMutationId = modeMutationId;
             try {
                 const status = await api('GET', '/api/admin/status');
+                if (refreshMutationId !== modeMutationId) return;
                 const loadedModels = status.loaded_models || [];
+                updateOperationModeUI(status.operation_mode || 'inference');
+                const modeValue = document.getElementById('status-mode-value');
+                if (modeValue) modeValue.textContent = status.operation_mode || 'inference';
 
                 // Update header badge
                 const headerBadges = document.querySelector('header > div');
@@ -924,7 +1189,7 @@
         async function refreshAvailableModels() {
             try {
                 const data = await api('GET', '/api/admin/models?status=ready');
-                const models = data.models || [];
+                const models = (data.models || []).filter(m => !m.experimental);
 
                 const container = document.getElementById('available-models');
                 if (!container) return;
@@ -967,7 +1232,209 @@
                 } else {
                     container.innerHTML = '<div class="empty-state"><p>No models available</p><p style="font-size: 0.875rem;">Download models or scan your local directory</p></div>';
                 }
+                updateOperationModeUI(currentOperationMode);
             } catch (err) { console.error('Failed to refresh available models:', err); }
+        }
+
+        function setSelectOptions(select, options, selectedValue = null, includeEmpty = false) {
+            if (!select) return;
+
+            const normalizedSelectedValue = selectedValue == null ? '' : String(selectedValue);
+            let html = '';
+            if (includeEmpty) {
+                html += '<option value="">None</option>';
+            }
+            html += options.map(option => `
+                <option value="${option.value}">${option.label}</option>
+            `).join('');
+
+            select.innerHTML = html;
+
+            const hasSelectedOption = options.some(option => String(option.value) === normalizedSelectedValue);
+            if (includeEmpty && normalizedSelectedValue === '') {
+                select.value = '';
+            } else if (hasSelectedOption) {
+                select.value = normalizedSelectedValue;
+            } else if (includeEmpty) {
+                select.value = '';
+            }
+        }
+
+        function renderExperimentalModels(models) {
+            const container = document.getElementById('experimental-models');
+            const select = document.getElementById('evaluation-model');
+            if (!container || !select) return;
+
+            const previousSelection = select.value;
+
+            if (!models.length) {
+                container.innerHTML = '<div class="empty-state"><p>No experimental models yet</p></div>';
+                select.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = models.map(model => `
+                <div class="model-item">
+                    <div class="model-info">
+                        <div class="model-name">${model.name} <span class="badge badge-experimental">Experimental</span></div>
+                        <div class="model-meta">${model.id}</div>
+                    </div>
+                    <div class="actions">
+                        <button onclick="promoteWorkbenchModel('${model.id}')" class="btn-small">Promote</button>
+                    </div>
+                </div>
+            `).join('');
+
+            setSelectOptions(
+                select,
+                models.map(model => ({ value: model.id, label: model.name })),
+                previousSelection
+            );
+        }
+
+        function renderWorkbenchJobs(jobs) {
+            const container = document.getElementById('workbench-jobs');
+            if (!container) return;
+
+            if (!jobs.length) {
+                container.innerHTML = '<div class="empty-state"><p>No workbench jobs yet</p></div>';
+                return;
+            }
+
+            container.innerHTML = jobs.map(job => `
+                <div class="job-item">
+                    <div class="job-header">
+                        <div>
+                            <div style="font-weight: 600;">${job.job_type}</div>
+                            <div class="muted">${job.base_model_id} → ${job.derived_model_id || 'pending'}</div>
+                        </div>
+                        <span class="badge ${job.status === 'complete' ? 'badge-success' : (job.status === 'error' ? 'badge-error' : 'badge-warning')}">${job.status}</span>
+                    </div>
+                    <div class="muted" style="margin-bottom: 0.75rem;">Stage: ${job.progress?.stage || 'queued'} (${job.progress?.percent ?? 0}%)</div>
+                    <div class="log-tail">${(job.log_tail || ['No log output yet.']).join('\n')}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderEvaluationRuns(evaluations) {
+            const container = document.getElementById('evaluation-runs');
+            if (!container) return;
+
+            if (!evaluations.length) {
+                container.innerHTML = '<div class="empty-state"><p>No evaluations yet</p></div>';
+                return;
+            }
+
+            container.innerHTML = evaluations.map(run => `
+                <div class="evaluation-item">
+                    <div class="evaluation-header">
+                        <div>
+                            <div style="font-weight: 600;">${run.model_id}</div>
+                            <div class="muted">${run.prompt_suite || 'custom'}</div>
+                        </div>
+                        <span class="badge ${run.status === 'complete' ? 'badge-success' : (run.status === 'error' ? 'badge-error' : 'badge-warning')}">${run.status}</span>
+                    </div>
+                    <div class="log-tail">${(run.log_tail || ['No evaluation log yet.']).join('\n')}</div>
+                </div>
+            `).join('');
+        }
+
+        async function refreshWorkbenchOverview() {
+            const refreshMutationId = modeMutationId;
+            try {
+                const data = await api('GET', '/api/admin/workbench/overview');
+                if (refreshMutationId !== modeMutationId) return;
+                updateOperationModeUI(data.operation_mode || currentOperationMode);
+                const baseSelect = document.getElementById('workbench-base-model');
+                const baselineSelect = document.getElementById('evaluation-baseline-model');
+                const previousBaseSelection = baseSelect?.value;
+                const previousBaselineSelection = baselineSelect?.value;
+
+                renderExperimentalModels(data.experimental_models || []);
+                renderWorkbenchJobs(data.jobs || []);
+                renderEvaluationRuns(data.evaluations || []);
+
+                if (baseSelect) {
+                    setSelectOptions(
+                        baseSelect,
+                        (data.base_models || []).map(model => ({ value: model.id, label: model.name })),
+                        previousBaseSelection
+                    );
+                }
+                if (baselineSelect) {
+                    setSelectOptions(
+                        baselineSelect,
+                        (data.base_models || []).map(model => ({ value: model.id, label: model.name })),
+                        previousBaselineSelection,
+                        true
+                    );
+                }
+            } catch (err) {
+                console.error('Failed to refresh workbench overview:', err);
+            }
+        }
+
+        async function startAbliterationJob() {
+            if (currentOperationMode !== 'workbench') {
+                showToast('Switch to workbench mode first', 'error');
+                return;
+            }
+
+            const baseModelId = document.getElementById('workbench-base-model')?.value;
+            if (!baseModelId) {
+                showToast('No compatible base model is available', 'error');
+                return;
+            }
+
+            try {
+                await api('POST', '/api/admin/workbench/jobs/copy-abliterate', {
+                    base_model_id: baseModelId,
+                    derived_name: document.getElementById('workbench-derived-name')?.value || null,
+                    strength: parseFloat(document.getElementById('workbench-strength')?.value || '1.0'),
+                    prompt_count: parseInt(document.getElementById('workbench-prompt-count')?.value || '6', 10),
+                });
+                showToast('Workbench job started');
+                await refreshWorkbenchOverview();
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        async function promoteWorkbenchModel(modelId) {
+            try {
+                await api('POST', `/api/admin/workbench/models/${modelId}/promote`);
+                showToast('Experimental model promoted');
+                await refreshWorkbenchOverview();
+                await refreshAvailableModels();
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        async function startEvaluation() {
+            if (currentOperationMode !== 'workbench') {
+                showToast('Switch to workbench mode first', 'error');
+                return;
+            }
+
+            const modelId = document.getElementById('evaluation-model')?.value;
+            if (!modelId) {
+                showToast('Choose an experimental model to evaluate', 'error');
+                return;
+            }
+
+            try {
+                await api('POST', '/api/admin/workbench/evaluations', {
+                    model_id: modelId,
+                    baseline_model_id: document.getElementById('evaluation-baseline-model')?.value || null,
+                    prompt_suite: document.getElementById('evaluation-prompt-suite')?.value || null,
+                    prompt_text: document.getElementById('evaluation-prompt-text')?.value || null,
+                });
+                showToast('Evaluation started');
+                await refreshWorkbenchOverview();
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
         }
 
         // Favorite toggle
@@ -998,6 +1465,10 @@
 
         // Model management
         async function loadModel(modelId) {
+            if (currentOperationMode !== 'inference') {
+                showToast('Switch back to inference mode before loading models', 'error');
+                return;
+            }
             showToast('Loading model...');
             try {
                 await api('POST', '/api/admin/models/load', { model_id: modelId });
@@ -1024,6 +1495,10 @@
         }
 
         async function setActiveModel(modelId) {
+            if (currentOperationMode !== 'inference') {
+                showToast('Switch back to inference mode before activating models', 'error');
+                return;
+            }
             try {
                 await api('POST', '/api/admin/models/set-active', { model_id: modelId });
                 showToast('Model activated');
@@ -1331,6 +1806,13 @@
 
         // Check for active downloads on page load (only if there are any)
         checkActiveDownloads();
+        updateOperationModeUI(currentOperationMode);
+        refreshWorkbenchOverview();
+        setInterval(() => {
+            if (currentOperationMode === 'workbench') {
+                refreshWorkbenchOverview();
+            }
+        }, 3000);
 
         // Settings
         function toggleApiKeyVisibility() {
@@ -1464,7 +1946,7 @@ Respond in the following JSON format:
 
                     if (!response.ok) {
                         const err = await response.json();
-                        throw new Error(err.error?.message || 'Request failed');
+                        throw new Error(err.error?.message || err.detail || 'Request failed');
                     }
 
                     const reader = response.body.getReader();
@@ -1508,7 +1990,7 @@ Respond in the following JSON format:
                     });
 
                     const data = await response.json();
-                    if (!response.ok) throw new Error(data.error?.message || 'Request failed');
+                    if (!response.ok) throw new Error(data.error?.message || data.detail || 'Request failed');
 
                     const assistantMessage = data.choices?.[0]?.message?.content || 'No response';
                     addMessage('assistant', assistantMessage);

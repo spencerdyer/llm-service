@@ -31,6 +31,7 @@ dependencies = [
 mac = [
     "mlx>=0.4.0",
     "mlx-lm>=0.4.0",
+    "llama-cpp-python>=0.3.0",
 ]
 linux = [
     "vllm>=0.3.0",
@@ -39,6 +40,11 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.1.0",
+]
+workbench = [
+    "transformers",
+    "torch",
+    "accelerate",
 ]
 
 [project.scripts]

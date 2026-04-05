@@ -25,6 +25,10 @@ class ChatMessageModel(BaseModel):
     content: str
 
 
+class StreamOptionsModel(BaseModel):
+    include_usage: Optional[bool] = False
+
+
 class ChatCompletionRequest(BaseModel):
     model: str = Field(default="default")
     messages: list[ChatMessageModel]
@@ -32,6 +36,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 0.9
     stream: Optional[bool] = False
+    stream_options: Optional[StreamOptionsModel] = None
     stop: Optional[list[str]] = None
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
@@ -48,6 +53,7 @@ class CompletionRequestModel(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 0.9
     stream: Optional[bool] = False
+    stream_options: Optional[StreamOptionsModel] = None
     stop: Optional[list[str]] = None
     frequency_penalty: Optional[float] = 0.0
     presence_penalty: Optional[float] = 0.0
@@ -145,6 +151,16 @@ def get_metrics_service(request: Request):
     return getattr(request.app.state, "metrics_service", None)
 
 
+def ensure_inference_mode(request: Request) -> None:
+    """Block normal inference while the app is in workbench mode."""
+    operation_mode = getattr(request.app.state, "operation_mode", "inference")
+    if operation_mode != "inference":
+        raise HTTPException(
+            status_code=503,
+            detail="The app is in workbench mode. Switch back to inference mode to use /v1 endpoints.",
+        )
+
+
 # --- Endpoints ---
 
 
@@ -154,10 +170,9 @@ async def list_models(
     _: str = Depends(verify_api_key),
 ):
     """List available models."""
+    ensure_inference_mode(request)
     model_manager = get_model_manager(request)
-    from llm_service.services.model_manager import ModelStatus
-
-    models = await model_manager.list_models(status=ModelStatus.READY)
+    models = await model_manager.list_inference_models()
 
     return ModelListResponse(
         data=[
@@ -177,6 +192,7 @@ async def chat_completions(
     _: str = Depends(verify_api_key),
 ):
     """Create a chat completion."""
+    ensure_inference_mode(request)
     backend_manager = get_backend_manager(request)
     config_manager = get_config_manager(request)
 
@@ -243,13 +259,18 @@ async def chat_completions(
             )
 
         metrics = get_metrics_service(request)
+        include_usage = (
+            body.stream_options.include_usage
+            if body.stream_options and body.stream_options.include_usage
+            else False
+        )
         # Estimate prompt tokens from message content for streaming
         prompt_text = "".join(m.content for m in body.messages)
         estimated_prompt_tokens = max(1, len(prompt_text) // 4)
         return StreamingResponse(
             _stream_chat_completion(
                 backend_manager, metrics, completion_request, request_id, created, model_name,
-                estimated_prompt_tokens
+                estimated_prompt_tokens, include_usage
             ),
             media_type="text/event-stream",
         )
@@ -295,20 +316,34 @@ async def chat_completions(
 
 async def _stream_chat_completion(
     backend_manager, metrics_service, request: CompletionRequest, request_id: str, created: int, model: str,
-    estimated_prompt_tokens: int = 0
+    estimated_prompt_tokens: int = 0, include_usage: bool = False
 ):
-    """Stream chat completion chunks."""
+    """Stream chat completion chunks per OpenAI spec."""
     import asyncio
 
     total_text = ""
     start_time = time.time()
-    client_disconnected = False
 
     try:
+        # Initial chunk: signal role to the client
+        initial_data = json.dumps({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant"},
+                "finish_reason": None,
+            }],
+        })
+        yield f"data: {initial_data}\n\n"
+
+        # Content chunks
         async for chunk in backend_manager.generate_stream(request):
             if chunk.text:
                 total_text += chunk.text
-            data = {
+            data = json.dumps({
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": created,
@@ -320,27 +355,35 @@ async def _stream_chat_completion(
                         "finish_reason": chunk.finish_reason,
                     }
                 ],
-            }
-            yield f"data: {json.dumps(data)}\n\n"
+            })
+            yield f"data: {data}\n\n"
+
+        # Final usage chunk (only when requested)
+        if include_usage:
+            estimated_completion_tokens = max(1, len(total_text) // 4)
+            usage_data = json.dumps({
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": estimated_prompt_tokens,
+                    "completion_tokens": estimated_completion_tokens,
+                    "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
+                },
+            })
+            yield f"data: {usage_data}\n\n"
 
         yield "data: [DONE]\n\n"
 
     except (asyncio.CancelledError, GeneratorExit):
-        # Client disconnected - this is expected, not an error
-        client_disconnected = True
+        pass
     except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
-        # Connection errors - client disconnected
-        client_disconnected = True
-    except Exception as e:
-        # Other errors - try to send error to client if still connected
-        try:
-            error_data = {"error": {"message": str(e), "type": "server_error"}}
-            yield f"data: {json.dumps(error_data)}\n\n"
-        except Exception:
-            # Client already disconnected, ignore
-            client_disconnected = True
+        pass
+    except Exception:
+        pass
     finally:
-        # Record metrics even if client disconnected (we still did the work)
         if metrics_service and total_text:
             try:
                 estimated_completion_tokens = max(1, len(total_text) // 4)
@@ -352,7 +395,7 @@ async def _stream_chat_completion(
                     tokens_per_second=tokens_per_second,
                 )
             except Exception:
-                pass  # Don't crash on metrics errors
+                pass
 
 
 @router.post("/completions")
@@ -362,6 +405,7 @@ async def completions(
     _: str = Depends(verify_api_key),
 ):
     """Create a completion."""
+    ensure_inference_mode(request)
     backend_manager = get_backend_manager(request)
     config_manager = get_config_manager(request)
 
@@ -419,12 +463,17 @@ async def completions(
             )
 
         metrics = get_metrics_service(request)
+        include_usage = (
+            body.stream_options.include_usage
+            if body.stream_options and body.stream_options.include_usage
+            else False
+        )
         # Estimate prompt tokens from prompt text for streaming
         estimated_prompt_tokens = max(1, len(body.prompt) // 4)
         return StreamingResponse(
             _stream_completion(
                 backend_manager, metrics, completion_request, request_id, created, model_name,
-                estimated_prompt_tokens
+                estimated_prompt_tokens, include_usage
             ),
             media_type="text/event-stream",
         )
@@ -469,20 +518,19 @@ async def completions(
 
 async def _stream_completion(
     backend_manager, metrics_service, request: CompletionRequest, request_id: str, created: int, model: str,
-    estimated_prompt_tokens: int = 0
+    estimated_prompt_tokens: int = 0, include_usage: bool = False
 ):
-    """Stream completion chunks."""
+    """Stream completion chunks per OpenAI spec."""
     import asyncio
 
     total_text = ""
     start_time = time.time()
-    client_disconnected = False
 
     try:
         async for chunk in backend_manager.generate_stream(request):
             if chunk.text:
                 total_text += chunk.text
-            data = {
+            data = json.dumps({
                 "id": request_id,
                 "object": "text_completion",
                 "created": created,
@@ -494,27 +542,35 @@ async def _stream_completion(
                         "finish_reason": chunk.finish_reason,
                     }
                 ],
-            }
-            yield f"data: {json.dumps(data)}\n\n"
+            })
+            yield f"data: {data}\n\n"
+
+        # Final usage chunk (only when requested)
+        if include_usage:
+            estimated_completion_tokens = max(1, len(total_text) // 4)
+            usage_data = json.dumps({
+                "id": request_id,
+                "object": "text_completion",
+                "created": created,
+                "model": model,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": estimated_prompt_tokens,
+                    "completion_tokens": estimated_completion_tokens,
+                    "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
+                },
+            })
+            yield f"data: {usage_data}\n\n"
 
         yield "data: [DONE]\n\n"
 
     except (asyncio.CancelledError, GeneratorExit):
-        # Client disconnected - this is expected, not an error
-        client_disconnected = True
+        pass
     except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
-        # Connection errors - client disconnected
-        client_disconnected = True
-    except Exception as e:
-        # Other errors - try to send error to client if still connected
-        try:
-            error_data = {"error": {"message": str(e), "type": "server_error"}}
-            yield f"data: {json.dumps(error_data)}\n\n"
-        except Exception:
-            # Client already disconnected, ignore
-            client_disconnected = True
+        pass
+    except Exception:
+        pass
     finally:
-        # Record metrics even if client disconnected (we still did the work)
         if metrics_service and total_text:
             try:
                 estimated_completion_tokens = max(1, len(total_text) // 4)
@@ -526,4 +582,4 @@ async def _stream_completion(
                     tokens_per_second=tokens_per_second,
                 )
             except Exception:
-                pass  # Don't crash on metrics errors
+                pass

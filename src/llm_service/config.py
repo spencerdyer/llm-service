@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # Model settings
     default_model: Optional[str] = None
-    max_model_len: int = 4096
+    max_model_len: int = 8192
     gpu_memory_utilization: float = 0.85  # For vLLM - leave headroom for display/other GPU processes
 
     @property
