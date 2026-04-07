@@ -77,6 +77,8 @@
           ] ++ pkgs.lib.optionals isLinux [
             # Linux-specific: C++ stdlib required by vLLM and other native extensions
             pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
+            pkgs.gcc14   # nvcc host compiler — GCC 15 is too new for CUDA's nvcc
           ];
 
           shellHook = ''
@@ -89,8 +91,14 @@
             # Note: We must NOT add system glibc paths to avoid conflicts with Nix glibc
             ${pkgs.lib.optionalString isLinux ''
               export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:-}"
+              export CUDA_DEVICE_ORDER="PCI_BUS_ID"
               export CUDA_HOME="/usr/local/cuda"
               export PATH="/usr/local/cuda/bin:$PATH"
+              # Use GCC 14 as the CUDA host compiler — GCC 15's type_traits are
+              # incompatible with nvcc (FlashInfer JIT reads CC for -ccbin)
+              export CC="${pkgs.gcc14}/bin/gcc"
+              export CXX="${pkgs.gcc14}/bin/g++"
+              export CUDAHOSTCXX="${pkgs.gcc14}/bin/g++"
 
               # Add CUDA library paths (runtime libs are in targets/x86_64-linux/lib)
               for cuda_lib in /usr/local/cuda/lib64 /usr/local/cuda/targets/x86_64-linux/lib; do
@@ -130,19 +138,43 @@
 
             source .venv/bin/activate
 
-            # Install platform-specific ML backends via pip
-            # (nixpkgs vLLM has broken dependencies, so we use pip for ML backends)
-            if [ "$LLM_SERVICE_PLATFORM" = "darwin" ]; then
-              echo "Installing MLX packages for Mac..."
-              pip install -q mlx mlx-lm 2>/dev/null || echo "Note: Install mlx-lm manually if needed"
-              CMAKE_ARGS="-DGGML_METAL=on" pip install -q llama-cpp-python 2>/dev/null || echo "Note: Install llama-cpp-python manually if needed"
-            else
-              echo "Installing vLLM for Linux..."
-              pip install -q vllm 2>/dev/null || echo "Note: Install vllm manually if needed"
-            fi
+            # Stamp file tracks whether heavy pip installs have completed.
+            # Delete .venv/.installed to force a full reinstall.
+            _stamp=".venv/.installed"
+            if [ ! -f "$_stamp" ]; then
+              echo "Installing dependencies (first time — this may take a few minutes)..."
 
-            # Install the project in editable mode with workbench extras
-            pip install -q -e ".[workbench]" 2>/dev/null || true
+              if [ "$LLM_SERVICE_PLATFORM" = "darwin" ]; then
+                echo "  Installing MLX packages for Mac..."
+                pip install -q mlx mlx-lm 2>/dev/null || echo "Note: Install mlx-lm manually if needed"
+                CMAKE_ARGS="-DGGML_METAL=on" pip install -q llama-cpp-python 2>/dev/null || echo "Note: Install llama-cpp-python manually if needed"
+              else
+                echo "  Installing vLLM for Linux..."
+                pip install -q vllm 2>/dev/null || echo "Note: Install vllm manually if needed"
+
+                echo "  Installing llm-compressor (quantization)..."
+                # Install from git main with --no-deps: the PyPI release pins
+                # transformers<5 which is incompatible with gemma4.
+                pip install -q --no-deps "llmcompressor @ git+https://github.com/vllm-project/llm-compressor.git@main" 2>/dev/null || true
+                pip install -q --no-deps "compressed-tensors @ git+https://github.com/vllm-project/compressed-tensors.git@main" 2>/dev/null || true
+
+                echo "  Upgrading transformers for gemma4 support..."
+                # vLLM/llmcompressor pin transformers<5 in metadata but work at
+                # runtime with >=5.5. Force-upgrade BEFORE the editable install so
+                # pip's resolver doesn't try to downgrade it.
+                pip install -q --force-reinstall --no-deps "transformers>=5.5.0" 2>/dev/null || true
+              fi
+
+              # Install the project and workbench extras (--no-deps: all real deps
+              # are already installed above; avoids pip re-resolving transformers)
+              pip install -q --no-deps -e ".[workbench]" 2>/dev/null || true
+
+              touch "$_stamp"
+              echo "  Done."
+            else
+              # Quick re-entry: reinstall project in case source changed
+              pip install -q --no-deps -e ".[workbench]" 2>/dev/null || true
+            fi
 
             echo ""
             echo "Commands:"

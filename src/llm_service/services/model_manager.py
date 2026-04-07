@@ -124,7 +124,7 @@ class ModelManager:
 
     async def initialize(self) -> None:
         """Initialize the model manager."""
-        self._db = await aiosqlite.connect(self.db_path)
+        self._db = await aiosqlite.connect(self.db_path, isolation_level=None)
         await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.execute("PRAGMA journal_mode = WAL")
 
@@ -207,11 +207,13 @@ class ModelManager:
                     break
             return ModelType.GGUF, quant
 
-        # Check for quantized models (AWQ, GPTQ)
+        # Check for pre-quantized models (AWQ, GPTQ, NVFP4)
         if "awq" in repo_lower:
             return ModelType.VLLM, "awq"
         if "gptq" in repo_lower:
             return ModelType.VLLM, "gptq"
+        if "nvfp4" in repo_lower or "fp4" in repo_lower:
+            return ModelType.VLLM, "nvfp4"
 
         # Default to vLLM for standard transformers models
         if any(f.endswith(".safetensors") for f in files) or any(
@@ -660,6 +662,7 @@ class ModelManager:
         derivation_type: str,
         local_path: Path,
         job_id: str,
+        quantization: Optional[str] = None,
     ) -> ModelInfo:
         """Create and persist an experimental derived model record."""
         model = ModelInfo(
@@ -668,7 +671,7 @@ class ModelManager:
             source=f"local/{model_id}",
             local_path=local_path,
             model_type=base_model.model_type,
-            quantization=base_model.quantization,
+            quantization=quantization or base_model.quantization,
             status=ModelStatus.TRAINING,
             metadata={
                 "experimental": True,
@@ -747,11 +750,13 @@ class ModelManager:
                     break
             return ModelType.GGUF, quant
 
-        # Check for quantized models (AWQ, GPTQ)
+        # Check for pre-quantized models (AWQ, GPTQ, NVFP4)
         if "awq" in dir_name:
             return ModelType.VLLM, "awq"
         if "gptq" in dir_name:
             return ModelType.VLLM, "gptq"
+        if "nvfp4" in dir_name or "fp4" in dir_name:
+            return ModelType.VLLM, "nvfp4"
 
         # Default to vLLM for standard transformers models
         if any(f.endswith(".safetensors") for f in files) or any(f.endswith(".bin") for f in files):
@@ -804,12 +809,62 @@ class ModelManager:
         scan_level(self.models_dir, 1)
         return candidates
 
+    def _symlink_hf_cache_models(self) -> list[Path]:
+        """Find models in the HuggingFace cache and create symlinks in the models directory.
+
+        Returns the list of newly created symlink paths.
+        """
+        hf_cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        if not hf_cache_dir.is_dir():
+            return []
+
+        created = []
+        for repo_dir in hf_cache_dir.iterdir():
+            if not repo_dir.name.startswith("models--"):
+                continue
+
+            # models--owner--repo -> owner--repo
+            model_id = repo_dir.name[len("models--"):]
+            symlink_path = self.models_dir / model_id
+
+            # Skip if already exists (symlink, directory, or broken link)
+            if symlink_path.exists() or symlink_path.is_symlink():
+                continue
+
+            # Find the latest snapshot
+            snapshots_dir = repo_dir / "snapshots"
+            if not snapshots_dir.is_dir():
+                continue
+
+            snapshot_dirs = sorted(
+                (d for d in snapshots_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            if not snapshot_dirs:
+                continue
+
+            snapshot = snapshot_dirs[0]
+
+            # Only symlink if the snapshot looks like a valid model
+            if self._is_valid_model_dir(snapshot):
+                symlink_path.symlink_to(snapshot)
+                created.append(symlink_path)
+
+        return created
+
     async def scan_local_models(self) -> list[ModelInfo]:
         """Scan the models directory for existing models and register them.
+
+        Also checks the HuggingFace cache (~/.cache/huggingface/hub/) for
+        downloaded models and creates symlinks into the models directory.
 
         Searches up to 2 levels deep to find models in nested folder structures.
         """
         registered = []
+
+        # Symlink any HF-cached models not already present
+        self._symlink_hf_cache_models()
 
         # Find all valid model directories
         model_dirs = self._find_model_directories(max_depth=2)
@@ -817,9 +872,8 @@ class ModelManager:
         for item in model_dirs:
             model_id = item.name
 
-            # Skip if already registered
             existing = await self.get_model(model_id)
-            if existing:
+            if existing and existing.status not in (ModelStatus.ERROR, ModelStatus.PENDING):
                 continue
 
             # Detect model type

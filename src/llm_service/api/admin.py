@@ -78,6 +78,13 @@ class WorkbenchAbliterationRequest(BaseModel):
     prompt_count: int = Field(default=6, ge=2, le=6)
 
 
+class WorkbenchQuantizationRequest(BaseModel):
+    base_model_id: str
+    derived_name: Optional[str] = None
+    method: str = Field(default="gptq", pattern="^(gptq|nvfp4)$")
+    num_calibration_samples: Optional[int] = Field(default=None, ge=16, le=2048)
+
+
 class WorkbenchEvaluationRequest(BaseModel):
     model_id: str
     baseline_model_id: Optional[str] = None
@@ -224,6 +231,23 @@ async def create_copy_abliterate_job(request: Request, body: WorkbenchAbliterati
             derived_name=body.derived_name,
             strength=body.strength,
             prompt_count=body.prompt_count,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return job
+
+
+@api_router.post("/workbench/jobs/quantize")
+async def create_quantization_job(request: Request, body: WorkbenchQuantizationRequest):
+    """Create a quantized model and start the quantization job."""
+    require_workbench_mode(request)
+    training_manager = get_training_manager(request)
+    try:
+        job = await training_manager.start_quantization_job(
+            base_model_id=body.base_model_id,
+            derived_name=body.derived_name,
+            method=body.method,
+            num_calibration_samples=body.num_calibration_samples,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

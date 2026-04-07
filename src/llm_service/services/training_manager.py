@@ -104,6 +104,11 @@ class TrainingManager:
         models = await self.model_manager.list_models(status=ModelStatus.READY)
         return [model for model in models if self.is_model_compatible(model)]
 
+    async def list_quantizable_models(self) -> list[ModelInfo]:
+        """List models eligible for quantization."""
+        models = await self.model_manager.list_models(status=ModelStatus.READY)
+        return [m for m in models if self._get_quantization_compatibility_issue(m) is None]
+
     def _job_dir(self, job_id: str) -> Path:
         return self.jobs_dir / job_id
 
@@ -210,6 +215,135 @@ class TrainingManager:
         )
         return await self.get_job(job_id)
 
+    def _get_quantization_compatibility_issue(self, model: ModelInfo) -> Optional[str]:
+        """Return a user-facing reason when a model cannot be quantized."""
+        if model.status != ModelStatus.READY:
+            return f"Model status must be ready, got {model.status.value}"
+        if model.metadata.get("experimental"):
+            return "Experimental models cannot be used as quantization sources"
+        if not model.local_path or not model.local_path.exists():
+            return "Model files are missing from disk"
+        if model.model_type.value == "gguf":
+            return "GGUF models cannot be quantized"
+        if model.quantization:
+            return f"Model is already quantized ({model.quantization})"
+        if settings.is_mac:
+            return "Quantization requires CUDA (Linux only)"
+
+        model_path = model.local_path
+        if model_path.is_file():
+            return "Single-file model artifacts are not supported"
+
+        files = {path.name for path in model_path.iterdir() if path.is_file()}
+        has_config = "config.json" in files
+        has_weights = any(name.endswith((".safetensors", ".bin")) for name in files)
+        if not (has_config and has_weights):
+            return "Model directory must include config and weight files"
+
+        return None
+
+    async def start_quantization_job(
+        self,
+        base_model_id: str,
+        derived_name: Optional[str] = None,
+        method: str = "gptq",
+        num_calibration_samples: Optional[int] = None,
+    ) -> dict:
+        """Create a quantized model and launch the quantization job.
+
+        Supported methods: 'gptq' (GPTQ W4A16) and 'nvfp4' (NVIDIA FP4).
+        """
+        supported = {"gptq", "nvfp4"}
+        if method not in supported:
+            raise ValueError(f"Unsupported quantization method '{method}'. Choose from: {', '.join(sorted(supported))}")
+
+        if await self.get_operation_mode() != "workbench":
+            raise ValueError("Switch the app to workbench mode before starting a quantization job")
+
+        if await self.config_manager.has_running_workbench_jobs():
+            raise ValueError("Only one workbench job can run at a time")
+        if await self.config_manager.has_running_evaluations():
+            raise ValueError("Wait for active evaluations to finish before starting a job")
+
+        if settings.is_mac:
+            raise ValueError("Quantization requires CUDA and is only available on Linux")
+
+        base_model = await self.model_manager.get_model(base_model_id)
+        if not base_model:
+            raise ValueError("Base model not found")
+        compatibility_issue = self._get_quantization_compatibility_issue(base_model)
+        if compatibility_issue:
+            raise ValueError(compatibility_issue)
+
+        await self._ensure_disk_space(base_model)
+
+        method_labels = {"gptq": "GPTQ-W4A16", "nvfp4": "NVFP4"}
+        method_label = method_labels[method]
+
+        job_id = f"job-{uuid.uuid4().hex[:12]}"
+        derived_model_id = f"{base_model.id}--{method_label}-{uuid.uuid4().hex[:8]}"
+        display_name = derived_name.strip() if derived_name else f"{base_model.name} {method_label}"
+        derived_path = self.model_manager.models_dir / derived_model_id
+        log_path = self._job_log_path(job_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await self.model_manager.create_derived_model(
+            base_model=base_model,
+            model_id=derived_model_id,
+            name=display_name,
+            derivation_type="quantization",
+            local_path=derived_path,
+            job_id=job_id,
+            quantization=method,
+        )
+
+        metadata = {
+            "method": method,
+            "derived_name": display_name,
+        }
+        if num_calibration_samples is not None:
+            metadata["num_calibration_samples"] = num_calibration_samples
+
+        await self.config_manager.create_workbench_job(
+            {
+                "id": job_id,
+                "job_type": "quantization",
+                "status": "pending",
+                "base_model_id": base_model.id,
+                "derived_model_id": derived_model_id,
+                "mode_snapshot": "workbench",
+                "log_path": str(log_path),
+                "progress": {"stage": "queued", "percent": 0},
+                "metadata": metadata,
+            }
+        )
+
+        try:
+            with log_path.open("a", encoding="utf-8") as log_file:
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "llm_service.workbench.quantization_runner", "--job-id", job_id],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(Path.cwd()),
+                )
+        except Exception as exc:
+            await self.config_manager.update_workbench_job(
+                job_id,
+                {"status": "error", "error": str(exc), "progress": {"stage": "failed", "percent": 0}},
+            )
+            await self.model_manager.mark_model_error(derived_model_id, str(exc))
+            raise
+
+        await self.config_manager.update_workbench_job(
+            job_id,
+            {
+                "status": "running",
+                "progress": {"stage": "starting", "percent": 2},
+                "metadata": {**metadata, "pid": process.pid},
+            },
+        )
+        return await self.get_job(job_id)
+
     async def get_job(self, job_id: str) -> Optional[dict]:
         """Fetch a workbench job with a short log tail."""
         job = await self.config_manager.get_workbench_job(job_id)
@@ -263,9 +397,11 @@ class TrainingManager:
             for model in await self.model_manager.list_models(status=ModelStatus.READY)
             if model.metadata.get("experimental")
         ]
+        quantization_models = [model.to_dict() for model in await self.list_quantizable_models()]
         return {
             "operation_mode": await self.get_operation_mode(),
             "base_models": base_models,
+            "quantization_base_models": quantization_models,
             "jobs": jobs,
             "experimental_models": experimental_models,
         }

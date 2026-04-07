@@ -227,8 +227,42 @@
             margin-bottom: 0.75rem;
         }
         .muted { color: var(--text-secondary); font-size: 0.8rem; }
-        .workbench-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; }
-        @media (max-width: 1000px) { .workbench-grid { grid-template-columns: 1fr; } }
+
+        .workbench-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+        @media (max-width: 1000px) { .workbench-layout { grid-template-columns: 1fr; } }
+        .workbench-sub-tabs {
+            display: flex; gap: 0.25rem; margin-bottom: 1rem;
+            background: var(--bg); padding: 0.25rem; border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+        .sub-tab {
+            padding: 0.4rem 1rem; background: none; border: none;
+            color: var(--text-secondary); font-size: 0.8rem; font-weight: 500;
+            cursor: pointer; border-radius: 0.375rem; transition: all 0.15s;
+        }
+        .sub-tab:hover { color: var(--text); background: var(--bg-hover); }
+        .sub-tab.active { color: var(--text); background: var(--bg-secondary); border: 1px solid var(--border); }
+        .sub-tab.disabled { opacity: 0.4; cursor: not-allowed; }
+        .sub-tab.disabled:hover { background: none; color: var(--text-secondary); }
+        .wb-panel { display: none; }
+        .wb-panel.active { display: block; }
+        .badge-job-quantization { background: #f97316; color: #000; }
+        .badge-job-abliteration { background: #8b5cf6; color: #fff; }
+        .badge-job-finetune { background: #06b6d4; color: #000; }
+        .job-progress { height: 4px; background: var(--bg-hover); border-radius: 2px; margin: 0.5rem 0; overflow: hidden; }
+        .job-progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s ease; }
+        .job-progress-bar.running { animation: pulse-bar 1.5s ease-in-out infinite; }
+        .job-progress-bar.complete { background: var(--success); }
+        .job-progress-bar.error { background: var(--error); }
+        @keyframes pulse-bar { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .wb-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .job-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
+        .platform-warning {
+            padding: 1rem; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--error);
+            border-radius: 0.375rem; color: var(--error); font-size: 0.875rem;
+        }
+        .checkbox-row { display: flex; align-items: center; gap: 0.5rem; }
+        .checkbox-row input[type="checkbox"] { width: auto; }
 
         .toast {
             position: fixed; bottom: 1rem; right: 1rem; padding: 1rem 1.5rem;
@@ -526,36 +560,132 @@
 
         <!-- Workbench Tab -->
         <div id="tab-workbench" class="tab-content">
-            <div class="workbench-grid">
-                <div>
+            <div class="workbench-layout">
+                <div class="workbench-main">
+                    <div class="workbench-sub-tabs">
+                        <button class="sub-tab active" data-workbench-tab="quantize">Quantize</button>
+                        <button class="sub-tab" data-workbench-tab="abliterate">Abliterate</button>
+                        <button class="sub-tab disabled" data-workbench-tab="finetune">Fine-tune</button>
+                    </div>
+
+                    <!-- Quantization Panel -->
+                    <div id="wb-panel-quantize" class="wb-panel active">
+                        <div class="card">
+                            <h2>Quantization</h2>
+                            {% if platform == 'darwin' %}
+                                <div class="platform-warning">
+                                    Quantization requires a Linux system with an NVIDIA GPU (CUDA). This feature is not available on macOS.
+                                </div>
+                            {% else %}
+                                <p class="muted" style="margin-bottom: 1rem;">
+                                    Quantize a full-precision model using llm-compressor. The original model is not modified.
+                                </p>
+                                <div class="form-group">
+                                    <label>Base Model</label>
+                                    <select id="wb-quant-base-model">
+                                        {% for model in workbench.quantization_base_models %}
+                                            <option value="{{ model.id }}">{{ model.name }}{% if model.quantization %} ({{ model.quantization }}){% endif %}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Output Name</label>
+                                    <input type="text" id="wb-quant-derived-name" placeholder="Optional custom name">
+                                </div>
+                                <div class="form-row-2">
+                                    <div class="form-group">
+                                        <label>Method</label>
+                                        <select id="wb-quant-method">
+                                            <option value="gptq" selected>GPTQ (W4A16) &mdash; best accuracy</option>
+                                            <option value="nvfp4">NVFP4 &mdash; best compression</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Calibration Samples</label>
+                                        <select id="wb-quant-calib-samples">
+                                            <option value="">Default</option>
+                                            <option value="64">64</option>
+                                            <option value="128">128</option>
+                                            <option value="256">256</option>
+                                            <option value="512">512</option>
+                                            <option value="1024">1024</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <p class="muted" style="margin-top: -0.5rem; margin-bottom: 1rem; font-size: 0.8rem;">
+                                    <strong>GPTQ</strong>: 4-bit integer weights, excellent accuracy retention. <strong>NVFP4</strong>: 4-bit floating point (NVIDIA), maximum compression.
+                                </p>
+                                <button class="wb-submit-btn" onclick="startQuantizationJob()">Start Quantization</button>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Abliteration Panel -->
+                    <div id="wb-panel-abliterate" class="wb-panel">
+                        <div class="card">
+                            <h2>Abliteration</h2>
+                            <p class="muted" style="margin-bottom: 1rem;">
+                                Create a safe copy of a model and remove refusal behavior via abliteration. The original model is never modified.
+                            </p>
+                            <div class="form-group">
+                                <label>Base Model</label>
+                                <select id="wb-abl-base-model">
+                                    {% for model in workbench.base_models %}
+                                        <option value="{{ model.id }}">{{ model.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Output Name</label>
+                                <input type="text" id="wb-abl-derived-name" placeholder="Optional custom name">
+                            </div>
+                            <div class="form-row-2">
+                                <div class="form-group">
+                                    <label>Abliteration Strength</label>
+                                    <input type="number" id="wb-abl-strength" min="0" max="2" step="0.1" value="1.0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Prompt Pairs</label>
+                                    <input type="number" id="wb-abl-prompt-count" min="2" max="6" step="1" value="6">
+                                </div>
+                            </div>
+                            <button class="wb-submit-btn" onclick="startAbliterationJob()">Copy For Abliteration</button>
+                        </div>
+                    </div>
+
+                    <!-- Fine-tune Panel -->
+                    <div id="wb-panel-finetune" class="wb-panel">
+                        <div class="card">
+                            <h2>Fine-tuning</h2>
+                            <div class="empty-state">
+                                <p>Fine-tuning support is coming soon.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="workbench-sidebar">
                     <div class="card">
-                        <h2>Abliteration Workflow</h2>
-                        <p class="muted" style="margin-bottom: 1rem;">
-                            Pick a compatible base model, create a safe copy, then run abliteration against the copy. The original model is never modified in place.
-                        </p>
-                        <div class="form-group">
-                            <label>Base Model</label>
-                            <select id="workbench-base-model">
-                                {% for model in workbench.base_models %}
-                                    <option value="{{ model.id }}">{{ model.name }}</option>
+                        <h2>Jobs</h2>
+                        <div id="workbench-jobs">
+                            {% if workbench.jobs %}
+                                {% for job in workbench.jobs %}
+                                    <div class="job-item">
+                                        <div class="job-header">
+                                            <div>
+                                                <div style="font-weight: 600;">{{ job.job_type }}</div>
+                                                <div class="muted">{{ job.base_model_id }} &rarr; {{ job.derived_model_id }}</div>
+                                            </div>
+                                            <span class="badge {% if job.status == 'complete' %}badge-success{% elif job.status == 'error' %}badge-error{% else %}badge-warning{% endif %}">{{ job.status }}</span>
+                                        </div>
+                                        <div class="muted" style="margin-bottom: 0.75rem;">Stage: {{ job.progress.stage if job.progress else 'queued' }}</div>
+                                        <div class="log-tail">{{ job.log_tail | join('\n') if job.log_tail else 'No log output yet.' }}</div>
+                                    </div>
                                 {% endfor %}
-                            </select>
+                            {% else %}
+                                <div class="empty-state"><p>No workbench jobs yet</p></div>
+                            {% endif %}
                         </div>
-                        <div class="form-group">
-                            <label>Derived Model Name</label>
-                            <input type="text" id="workbench-derived-name" placeholder="Optional custom name">
-                        </div>
-                        <div class="form-row-2">
-                            <div class="form-group">
-                                <label>Abliteration Strength</label>
-                                <input type="number" id="workbench-strength" min="0" max="2" step="0.1" value="1.0">
-                            </div>
-                            <div class="form-group">
-                                <label>Prompt Pairs</label>
-                                <input type="number" id="workbench-prompt-count" min="2" max="6" step="1" value="6">
-                            </div>
-                        </div>
-                        <button id="start-abliteration-btn" onclick="startAbliterationJob()">Copy For Abliteration</button>
                     </div>
 
                     <div class="card">
@@ -578,34 +708,9 @@
                             {% endif %}
                         </div>
                     </div>
-                </div>
-
-                <div>
-                    <div class="card">
-                        <h2>Workbench Jobs</h2>
-                        <div id="workbench-jobs">
-                            {% if workbench.jobs %}
-                                {% for job in workbench.jobs %}
-                                    <div class="job-item">
-                                        <div class="job-header">
-                                            <div>
-                                                <div style="font-weight: 600;">{{ job.job_type }}</div>
-                                                <div class="muted">{{ job.base_model_id }} → {{ job.derived_model_id }}</div>
-                                            </div>
-                                            <span class="badge {% if job.status == 'complete' %}badge-success{% elif job.status == 'error' %}badge-error{% else %}badge-warning{% endif %}">{{ job.status }}</span>
-                                        </div>
-                                        <div class="muted" style="margin-bottom: 0.75rem;">Stage: {{ job.progress.stage if job.progress else 'queued' }}</div>
-                                        <div class="log-tail">{{ job.log_tail | join('\n') if job.log_tail else 'No log output yet.' }}</div>
-                                    </div>
-                                {% endfor %}
-                            {% else %}
-                                <div class="empty-state"><p>No workbench jobs yet</p></div>
-                            {% endif %}
-                        </div>
-                    </div>
 
                     <div class="card">
-                        <h2>Evaluate Experimental Models</h2>
+                        <h2>Evaluate Models</h2>
                         <div class="form-group">
                             <label>Experimental Model</label>
                             <select id="evaluation-model">
@@ -984,6 +1089,20 @@
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
 
+        // Workbench sub-tab switching
+        function switchWorkbenchTab(tabId) {
+            document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.wb-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`[data-workbench-tab="${tabId}"]`)?.classList.add('active');
+            document.getElementById(`wb-panel-${tabId}`)?.classList.add('active');
+        }
+        document.querySelectorAll('.sub-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.classList.contains('disabled')) return;
+                switchWorkbenchTab(tab.dataset.workbenchTab);
+            });
+        });
+
         // Model type filtering for available models
         document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -1296,24 +1415,63 @@
             const container = document.getElementById('workbench-jobs');
             if (!container) return;
 
+            const typeLabels = {
+                'quantization': { label: 'Quantization', badge: 'badge-job-quantization' },
+                'copy_abliterate': { label: 'Abliteration', badge: 'badge-job-abliteration' },
+                'fine_tune': { label: 'Fine-tune', badge: 'badge-job-finetune' },
+            };
+
+            // Disable/enable submit buttons based on running jobs
+            const hasRunning = jobs.some(j => j.status === 'running' || j.status === 'pending');
+            const defaultLabels = { 'wb-panel-quantize': 'Start Quantization', 'wb-panel-abliterate': 'Copy For Abliteration' };
+            document.querySelectorAll('.wb-submit-btn').forEach(btn => {
+                btn.disabled = hasRunning;
+                const panelId = btn.closest('.wb-panel')?.id;
+                if (hasRunning) {
+                    btn.title = 'A job is already running';
+                    btn.textContent = 'Job Running\u2026';
+                } else {
+                    btn.title = '';
+                    if (panelId && defaultLabels[panelId]) btn.textContent = defaultLabels[panelId];
+                }
+            });
+
             if (!jobs.length) {
                 container.innerHTML = '<div class="empty-state"><p>No workbench jobs yet</p></div>';
                 return;
             }
 
-            container.innerHTML = jobs.map(job => `
-                <div class="job-item">
-                    <div class="job-header">
-                        <div>
-                            <div style="font-weight: 600;">${job.job_type}</div>
-                            <div class="muted">${job.base_model_id} → ${job.derived_model_id || 'pending'}</div>
+            container.innerHTML = jobs.map(job => {
+                const typeInfo = typeLabels[job.job_type] || { label: job.job_type, badge: 'badge-info' };
+                const statusBadge = job.status === 'complete' ? 'badge-success' : (job.status === 'error' ? 'badge-error' : 'badge-warning');
+                const percent = job.progress?.percent ?? 0;
+                const isComplete = job.status === 'complete';
+                const isError = job.status === 'error';
+                const showPromote = isComplete && job.derived_model_id;
+
+                return `
+                    <div class="job-item">
+                        <div class="job-header">
+                            <div>
+                                <span class="badge ${typeInfo.badge}">${typeInfo.label}</span>
+                                <span class="badge ${statusBadge}">${job.status}</span>
+                            </div>
                         </div>
-                        <span class="badge ${job.status === 'complete' ? 'badge-success' : (job.status === 'error' ? 'badge-error' : 'badge-warning')}">${job.status}</span>
+                        <div class="muted">${job.base_model_id} &rarr; ${job.derived_model_id || 'pending'}</div>
+                        <div class="job-progress">
+                            <div class="job-progress-bar ${isComplete ? 'complete' : (isError ? 'error' : 'running')}" style="width: ${Math.max(percent, 2)}%"></div>
+                        </div>
+                        <div class="muted">Stage: ${job.progress?.stage || 'queued'} (${percent}%)</div>
+                        <div class="log-tail">${(job.log_tail || ['No log output yet.']).join('\n')}</div>
+                        ${showPromote ? `
+                            <div class="job-actions">
+                                <button class="btn-small" onclick="promoteWorkbenchModel('${job.derived_model_id}')">Promote to Available</button>
+                                <span class="muted">Make this model available for inference</span>
+                            </div>
+                        ` : ''}
                     </div>
-                    <div class="muted" style="margin-bottom: 0.75rem;">Stage: ${job.progress?.stage || 'queued'} (${job.progress?.percent ?? 0}%)</div>
-                    <div class="log-tail">${(job.log_tail || ['No log output yet.']).join('\n')}</div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function renderEvaluationRuns(evaluations) {
@@ -1345,32 +1503,60 @@
                 const data = await api('GET', '/api/admin/workbench/overview');
                 if (refreshMutationId !== modeMutationId) return;
                 updateOperationModeUI(data.operation_mode || currentOperationMode);
-                const baseSelect = document.getElementById('workbench-base-model');
+
+                const ablBaseOptions = (data.base_models || []).map(m => ({ value: m.id, label: m.name }));
+                const quantBaseOptions = (data.quantization_base_models || []).map(m => ({ value: m.id, label: m.name }));
+
+                // Populate workflow-specific base-model selects
+                const quantSelect = document.getElementById('wb-quant-base-model');
+                if (quantSelect) setSelectOptions(quantSelect, quantBaseOptions, quantSelect.value);
+                const ablSelect = document.getElementById('wb-abl-base-model');
+                if (ablSelect) setSelectOptions(ablSelect, ablBaseOptions, ablSelect.value);
+
                 const baselineSelect = document.getElementById('evaluation-baseline-model');
-                const previousBaseSelection = baseSelect?.value;
-                const previousBaselineSelection = baselineSelect?.value;
+                if (baselineSelect) {
+                    setSelectOptions(baselineSelect, baseModelOptions, baselineSelect.value, true);
+                }
 
                 renderExperimentalModels(data.experimental_models || []);
                 renderWorkbenchJobs(data.jobs || []);
                 renderEvaluationRuns(data.evaluations || []);
-
-                if (baseSelect) {
-                    setSelectOptions(
-                        baseSelect,
-                        (data.base_models || []).map(model => ({ value: model.id, label: model.name })),
-                        previousBaseSelection
-                    );
-                }
-                if (baselineSelect) {
-                    setSelectOptions(
-                        baselineSelect,
-                        (data.base_models || []).map(model => ({ value: model.id, label: model.name })),
-                        previousBaselineSelection,
-                        true
-                    );
-                }
             } catch (err) {
                 console.error('Failed to refresh workbench overview:', err);
+            }
+        }
+
+        async function startQuantizationJob() {
+            if (currentOperationMode !== 'workbench') {
+                showToast('Switch to workbench mode first', 'error');
+                return;
+            }
+            const baseModelId = document.getElementById('wb-quant-base-model')?.value;
+            if (!baseModelId) {
+                showToast('No compatible base model is available', 'error');
+                return;
+            }
+            const btn = document.querySelector('#wb-panel-quantize .wb-submit-btn');
+            const originalText = btn?.textContent;
+            if (btn) { btn.disabled = true; btn.textContent = 'Starting\u2026'; }
+
+            const calibSamples = document.getElementById('wb-quant-calib-samples')?.value;
+            const body = {
+                base_model_id: baseModelId,
+                derived_name: document.getElementById('wb-quant-derived-name')?.value || null,
+                method: document.getElementById('wb-quant-method')?.value || 'gptq',
+            };
+            if (calibSamples) {
+                body.num_calibration_samples = parseInt(calibSamples, 10);
+            }
+            try {
+                const job = await api('POST', '/api/admin/workbench/jobs/quantize', body);
+                showToast('Quantization job started \u2014 see Jobs panel for progress');
+                await refreshWorkbenchOverview();
+                if (job?.id) startJobPolling(job.id);
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = originalText; }
             }
         }
 
@@ -1379,25 +1565,50 @@
                 showToast('Switch to workbench mode first', 'error');
                 return;
             }
-
-            const baseModelId = document.getElementById('workbench-base-model')?.value;
+            const baseModelId = document.getElementById('wb-abl-base-model')?.value;
             if (!baseModelId) {
                 showToast('No compatible base model is available', 'error');
                 return;
             }
+            const btn = document.querySelector('#wb-panel-abliterate .wb-submit-btn');
+            const originalText = btn?.textContent;
+            if (btn) { btn.disabled = true; btn.textContent = 'Starting\u2026'; }
 
             try {
-                await api('POST', '/api/admin/workbench/jobs/copy-abliterate', {
+                const job = await api('POST', '/api/admin/workbench/jobs/copy-abliterate', {
                     base_model_id: baseModelId,
-                    derived_name: document.getElementById('workbench-derived-name')?.value || null,
-                    strength: parseFloat(document.getElementById('workbench-strength')?.value || '1.0'),
-                    prompt_count: parseInt(document.getElementById('workbench-prompt-count')?.value || '6', 10),
+                    derived_name: document.getElementById('wb-abl-derived-name')?.value || null,
+                    strength: parseFloat(document.getElementById('wb-abl-strength')?.value || '1.0'),
+                    prompt_count: parseInt(document.getElementById('wb-abl-prompt-count')?.value || '6', 10),
                 });
-                showToast('Workbench job started');
+                showToast('Abliteration job started \u2014 see Jobs panel for progress');
                 await refreshWorkbenchOverview();
+                if (job?.id) startJobPolling(job.id);
             } catch (err) {
                 showToast('Error: ' + err.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = originalText; }
             }
+        }
+
+        function startJobPolling(jobId) {
+            let errorCount = 0;
+            const evtSource = new EventSource(`/api/admin/workbench/jobs/${jobId}/stream`);
+            evtSource.onmessage = (event) => {
+                errorCount = 0;
+                try {
+                    const job = JSON.parse(event.data);
+                    refreshWorkbenchOverview();
+                    if (job.status === 'complete' || job.status === 'error') {
+                        evtSource.close();
+                        if (job.status === 'complete') showToast('Job completed successfully');
+                        else showToast('Job failed \u2014 check logs for details', 'error');
+                    }
+                } catch (_) { /* ignore parse errors */ }
+            };
+            evtSource.onerror = () => {
+                errorCount++;
+                if (errorCount > 5) evtSource.close();
+            };
         }
 
         async function promoteWorkbenchModel(modelId) {

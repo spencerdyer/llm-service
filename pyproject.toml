@@ -42,9 +42,9 @@ dev = [
     "ruff>=0.1.0",
 ]
 workbench = [
-    "transformers",
     "torch",
     "accelerate",
+    "datasets",
 ]
 
 [project.scripts]

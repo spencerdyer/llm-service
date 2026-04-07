@@ -32,7 +32,7 @@ class StreamOptionsModel(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = Field(default="default")
     messages: list[ChatMessageModel]
-    max_tokens: Optional[int] = Field(default=512, alias="max_tokens")
+    max_tokens: Optional[int] = Field(default=None, alias="max_tokens")
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 0.9
     stream: Optional[bool] = False
@@ -49,7 +49,7 @@ class ChatCompletionRequest(BaseModel):
 class CompletionRequestModel(BaseModel):
     model: str = Field(default="default")
     prompt: str
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = None
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 0.9
     stream: Optional[bool] = False

@@ -17,7 +17,7 @@ class ConfigManager:
 
     async def initialize(self) -> None:
         """Initialize the database."""
-        self._db = await aiosqlite.connect(self.db_path)
+        self._db = await aiosqlite.connect(self.db_path, isolation_level=None)
         await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.execute("PRAGMA journal_mode = WAL")
         await self._create_tables()
