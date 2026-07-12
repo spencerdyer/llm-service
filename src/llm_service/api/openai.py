@@ -164,15 +164,25 @@ def ensure_inference_mode(request: Request) -> None:
 # --- Endpoints ---
 
 
+def _resolve_loaded_model(backend_manager, model_ref: Optional[str]):
+    """Resolve a client model id to a loaded model, or raise an HTTP error."""
+    try:
+        return backend_manager.resolve_request_model(model_ref)
+    except ValueError as e:
+        message = str(e)
+        status = 503 if message.startswith("No model loaded") else 404
+        raise HTTPException(status_code=status, detail=message) from e
+
+
 @router.get("/models", response_model=ModelListResponse)
 async def list_models(
     request: Request,
     _: str = Depends(verify_api_key),
 ):
-    """List available models."""
+    """List models currently loaded and available for inference."""
     ensure_inference_mode(request)
-    model_manager = get_model_manager(request)
-    models = await model_manager.list_inference_models()
+    backend_manager = get_backend_manager(request)
+    models = backend_manager.loaded_models
 
     return ModelListResponse(
         data=[
@@ -196,13 +206,12 @@ async def chat_completions(
     backend_manager = get_backend_manager(request)
     config_manager = get_config_manager(request)
 
-    if not backend_manager.is_ready:
-        raise HTTPException(status_code=503, detail="No model loaded")
+    selected_model = _resolve_loaded_model(backend_manager, body.model)
+    model_id = selected_model.id
 
     # Get per-model configuration defaults
-    model_id = backend_manager.current_model.id if backend_manager.current_model else None
     model_config = None
-    if model_id and config_manager:
+    if config_manager:
         model_config = await config_manager.get_model_config(model_id)
 
     # Use model config as defaults, allow request to override
@@ -245,13 +254,11 @@ async def chat_completions(
 
     request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
-    model_name = (
-        backend_manager.current_model.id if backend_manager.current_model else "unknown"
-    )
+    model_name = model_id
 
     if body.stream:
         # Pre-check queue availability for streaming requests
-        available, queue_len = backend_manager.check_queue_available()
+        available, queue_len = backend_manager.check_queue_available(model_id)
         if not available:
             raise HTTPException(
                 status_code=503,
@@ -270,7 +277,7 @@ async def chat_completions(
         return StreamingResponse(
             _stream_chat_completion(
                 backend_manager, metrics, completion_request, request_id, created, model_name,
-                estimated_prompt_tokens, include_usage
+                estimated_prompt_tokens, include_usage, model_id=model_id,
             ),
             media_type="text/event-stream",
         )
@@ -278,7 +285,7 @@ async def chat_completions(
     # Non-streaming response
     try:
         start_time = time.time()
-        response = await backend_manager.generate(completion_request)
+        response = await backend_manager.generate(completion_request, model_id=model_id)
         duration = time.time() - start_time
     except RuntimeError as e:
         if "queue" in str(e).lower():
@@ -316,7 +323,7 @@ async def chat_completions(
 
 async def _stream_chat_completion(
     backend_manager, metrics_service, request: CompletionRequest, request_id: str, created: int, model: str,
-    estimated_prompt_tokens: int = 0, include_usage: bool = False
+    estimated_prompt_tokens: int = 0, include_usage: bool = False, model_id: Optional[str] = None,
 ):
     """Stream chat completion chunks per OpenAI spec."""
     import asyncio
@@ -340,7 +347,7 @@ async def _stream_chat_completion(
         yield f"data: {initial_data}\n\n"
 
         # Content chunks
-        async for chunk in backend_manager.generate_stream(request):
+        async for chunk in backend_manager.generate_stream(request, model_id=model_id):
             if chunk.text:
                 total_text += chunk.text
             data = json.dumps({
@@ -409,13 +416,12 @@ async def completions(
     backend_manager = get_backend_manager(request)
     config_manager = get_config_manager(request)
 
-    if not backend_manager.is_ready:
-        raise HTTPException(status_code=503, detail="No model loaded")
+    selected_model = _resolve_loaded_model(backend_manager, body.model)
+    model_id = selected_model.id
 
     # Get per-model configuration defaults
-    model_id = backend_manager.current_model.id if backend_manager.current_model else None
     model_config = None
-    if model_id and config_manager:
+    if config_manager:
         model_config = await config_manager.get_model_config(model_id)
 
     # Use model config as defaults
@@ -449,13 +455,11 @@ async def completions(
 
     request_id = f"cmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
-    model_name = (
-        backend_manager.current_model.id if backend_manager.current_model else "unknown"
-    )
+    model_name = model_id
 
     if body.stream:
         # Pre-check queue availability for streaming requests
-        available, queue_len = backend_manager.check_queue_available()
+        available, queue_len = backend_manager.check_queue_available(model_id)
         if not available:
             raise HTTPException(
                 status_code=503,
@@ -473,14 +477,14 @@ async def completions(
         return StreamingResponse(
             _stream_completion(
                 backend_manager, metrics, completion_request, request_id, created, model_name,
-                estimated_prompt_tokens, include_usage
+                estimated_prompt_tokens, include_usage, model_id=model_id,
             ),
             media_type="text/event-stream",
         )
 
     try:
         start_time = time.time()
-        response = await backend_manager.generate(completion_request)
+        response = await backend_manager.generate(completion_request, model_id=model_id)
         duration = time.time() - start_time
     except RuntimeError as e:
         if "queue" in str(e).lower():
@@ -518,7 +522,7 @@ async def completions(
 
 async def _stream_completion(
     backend_manager, metrics_service, request: CompletionRequest, request_id: str, created: int, model: str,
-    estimated_prompt_tokens: int = 0, include_usage: bool = False
+    estimated_prompt_tokens: int = 0, include_usage: bool = False, model_id: Optional[str] = None,
 ):
     """Stream completion chunks per OpenAI spec."""
     import asyncio
@@ -527,7 +531,7 @@ async def _stream_completion(
     start_time = time.time()
 
     try:
-        async for chunk in backend_manager.generate_stream(request):
+        async for chunk in backend_manager.generate_stream(request, model_id=model_id):
             if chunk.text:
                 total_text += chunk.text
             data = json.dumps({

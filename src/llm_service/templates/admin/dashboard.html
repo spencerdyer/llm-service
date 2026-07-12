@@ -1054,7 +1054,7 @@
                     <div class="form-group">
                         <label>Context Length</label>
                         <input type="number" id="config-context-length" min="512" max="131072" step="512" value="4096">
-                        <div class="form-help">Max context window size</div>
+                        <div class="form-help">Max context window size. Applied on next model load (vLLM/GGUF).</div>
                     </div>
                 </div>
 
@@ -1783,7 +1783,7 @@
 
             try {
                 await api('PUT', `/api/admin/models/${modelId}/config`, config);
-                showToast('Configuration saved');
+                showToast('Configuration saved. Reload the model for context length changes to take effect.');
                 closeConfigModal();
                 await refreshAvailableModels();
             } catch (err) {

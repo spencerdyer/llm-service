@@ -86,6 +86,40 @@ class BackendManager:
         """Get all loaded models."""
         return [lm.model for lm in self._loaded_models.values()]
 
+    def resolve_request_model(self, model_ref: Optional[str] = None) -> ModelInfo:
+        """Resolve a /v1 model reference to an already-loaded model.
+
+        Does not load or unload models. Accepts the local model id, HuggingFace
+        source, or aliases ``default`` / ``auto`` / empty for the active model.
+        """
+        if not self._loaded_models:
+            raise ValueError("No model loaded. Load a model from the admin portal first.")
+
+        aliases = {"default", "auto", "local", ""}
+        if model_ref is None or model_ref.strip().lower() in aliases:
+            if self.current_model:
+                return self.current_model
+            # Fall back to any loaded model if active is unset
+            return next(iter(self._loaded_models.values())).model
+
+        ref = model_ref.strip()
+        normalized_id = ref.replace("/", "--")
+
+        loaded = self._loaded_models.get(ref) or self._loaded_models.get(normalized_id)
+        if loaded:
+            return loaded.model
+
+        for candidate in self._loaded_models.values():
+            if candidate.model.source == ref or candidate.model.name == ref:
+                return candidate.model
+
+        available = ", ".join(sorted(self._loaded_models.keys()))
+        raise ValueError(
+            f"Model '{model_ref}' is not loaded. "
+            f"Available loaded models: {available}. "
+            "Load models from the admin portal."
+        )
+
     async def _create_backend(self, model: ModelInfo) -> BaseBackend:
         """Create the appropriate backend for the model.
 
@@ -113,7 +147,11 @@ class BackendManager:
         else:
             from llm_service.backends.vllm_backend import VLLMBackend
 
-            return VLLMBackend(str(model.local_path), quantization=model.quantization)
+            return VLLMBackend(
+                str(model.local_path),
+                quantization=model.quantization,
+                max_model_len=ctx_len,
+            )
 
     async def load_model(self, model_id_or_source: str) -> ModelInfo:
         """Load a model by ID or HuggingFace source.

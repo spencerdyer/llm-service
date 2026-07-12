@@ -14,15 +14,38 @@ from llm_service.backends.base import (
 from llm_service.config import settings
 
 
+# Map our stored quantization labels to vLLM AsyncEngineArgs.quantization values.
+# NVFP4/modelopt checkpoints usually self-describe via hf_quant_config.json; we still
+# pass an explicit method when vLLM expects one.
+_VLLM_QUANTIZATION_MAP = {
+    "awq": "awq",
+    "gptq": "gptq",
+    "nvfp4": "modelopt",
+    "modelopt": "modelopt",
+}
+
+
 class VLLMBackend(BaseBackend):
     """vLLM-based backend for CUDA systems with true streaming and concurrent request support."""
 
-    def __init__(self, model_path: str, quantization: Optional[str] = None):
+    def __init__(
+        self,
+        model_path: str,
+        quantization: Optional[str] = None,
+        max_model_len: Optional[int] = None,
+    ):
         super().__init__(model_path)
         self._engine = None
         self._tokenizer = None
         self._quantization = quantization
+        self._max_model_len = max_model_len or settings.max_model_len
         self._active_requests: set[str] = set()
+
+    def _vllm_quantization_arg(self) -> Optional[str]:
+        """Return a vLLM quantization method string, or None to let vLLM auto-detect."""
+        if not self._quantization:
+            return None
+        return _VLLM_QUANTIZATION_MAP.get(self._quantization.lower())
 
     async def load(self) -> None:
         """Load the vLLM model using AsyncLLMEngine for streaming support."""
@@ -31,14 +54,18 @@ class VLLMBackend(BaseBackend):
 
         from vllm import AsyncEngineArgs, AsyncLLMEngine
 
-        # Configure engine args
-        engine_args = AsyncEngineArgs(
-            model=self.model_path,
-            trust_remote_code=True,
-            max_model_len=settings.max_model_len,
-            gpu_memory_utilization=settings.gpu_memory_utilization,
-            disable_log_stats=True,
-        )
+        engine_kwargs = {
+            "model": self.model_path,
+            "trust_remote_code": True,
+            "max_model_len": self._max_model_len,
+            "gpu_memory_utilization": settings.gpu_memory_utilization,
+            "disable_log_stats": True,
+        }
+        quantization = self._vllm_quantization_arg()
+        if quantization:
+            engine_kwargs["quantization"] = quantization
+
+        engine_args = AsyncEngineArgs(**engine_kwargs)
 
         # Create async engine - must be done in async context
         # Use from_engine_args which handles initialization properly
@@ -230,6 +257,7 @@ class VLLMBackend(BaseBackend):
             "model_path": self.model_path,
             "loaded": self._loaded,
             "quantization": self._quantization,
+            "max_model_len": self._max_model_len,
             "streaming": True,
             "batching_enabled": True,
             "active_requests": len(self._active_requests),
