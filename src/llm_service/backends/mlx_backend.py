@@ -103,14 +103,37 @@ class MLXBackend(BaseBackend):
         self._prompt_caches.clear()
         self._loaded = False
 
-    def _apply_chat_template(self, messages: list[ChatMessage]) -> str:
+    def _apply_chat_template(
+        self, messages: list[ChatMessage], enable_thinking: Optional[bool] = None
+    ) -> str:
         """Apply the tokenizer's chat template if available."""
         if self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template"):
             message_dicts = [{"role": m.role, "content": m.content} for m in messages]
+            kwargs = {
+                "tokenize": False,
+                "add_generation_prompt": True,
+            }
+            if enable_thinking is not None:
+                kwargs["enable_thinking"] = enable_thinking
             try:
-                return self._tokenizer.apply_chat_template(
-                    message_dicts, tokenize=False, add_generation_prompt=True
-                )
+                return self._tokenizer.apply_chat_template(message_dicts, **kwargs)
+            except TypeError:
+                if enable_thinking is not None:
+                    try:
+                        return self._tokenizer.apply_chat_template(
+                            message_dicts,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            chat_template_kwargs={"enable_thinking": enable_thinking},
+                        )
+                    except TypeError:
+                        pass
+                try:
+                    return self._tokenizer.apply_chat_template(
+                        message_dicts, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
         return self.format_chat_prompt(messages)
@@ -251,7 +274,9 @@ class MLXBackend(BaseBackend):
 
         # Build prompt
         if request.messages:
-            prompt_text = self._apply_chat_template(request.messages)
+            prompt_text = self._apply_chat_template(
+                request.messages, enable_thinking=request.enable_thinking
+            )
         elif request.prompt:
             prompt_text = request.prompt
         else:
@@ -299,7 +324,9 @@ class MLXBackend(BaseBackend):
 
         # Build prompt
         if request.messages:
-            prompt = self._apply_chat_template(request.messages)
+            prompt = self._apply_chat_template(
+                request.messages, enable_thinking=request.enable_thinking
+            )
         elif request.prompt:
             prompt = request.prompt
         else:

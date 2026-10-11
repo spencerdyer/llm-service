@@ -5,11 +5,22 @@ import uuid
 from typing import AsyncIterator, Optional
 
 from llm_service.backends.base import (
+    THINK_TAGS,
     BaseBackend,
     ChatMessage,
     CompletionRequest,
     CompletionResponse,
     StreamChunk,
+    message_to_openai,
+    split_thinking_content,
+)
+from llm_service.backends.multimodal import collect_multimodal_data
+from llm_service.backends.tool_parse import (
+    apply_tool_policy,
+    guided_tool_schema,
+    parse_tool_calls_from_text,
+    tool_calls_to_stream_deltas,
+    tools_are_active,
 )
 from llm_service.config import settings
 
@@ -60,12 +71,24 @@ class VLLMBackend(BaseBackend):
             "max_model_len": self._max_model_len,
             "gpu_memory_utilization": settings.gpu_memory_utilization,
             "disable_log_stats": True,
+            "limit_mm_per_prompt": {
+                "image": {"count": 4, "width": 1024, "height": 1024},
+                "video": {"count": 1, "num_frames": 8, "width": 640, "height": 360},
+            },
+            "allowed_local_media_path": "/",
         }
         quantization = self._vllm_quantization_arg()
         if quantization:
             engine_kwargs["quantization"] = quantization
+        tool_kwargs = self._tool_engine_kwargs()
+        engine_kwargs.update(tool_kwargs)
 
-        engine_args = AsyncEngineArgs(**engine_kwargs)
+        try:
+            engine_args = AsyncEngineArgs(**engine_kwargs)
+        except TypeError:
+            for key in tool_kwargs:
+                engine_kwargs.pop(key, None)
+            engine_args = AsyncEngineArgs(**engine_kwargs)
 
         # Create async engine - must be done in async context
         # Use from_engine_args which handles initialization properly
@@ -117,14 +140,43 @@ class VLLMBackend(BaseBackend):
         self._tokenizer = None
         self._loaded = False
 
-    def _apply_chat_template(self, messages: list[ChatMessage]) -> str:
+    def _apply_chat_template(
+        self,
+        messages: list[ChatMessage],
+        enable_thinking: Optional[bool] = None,
+        tools: Optional[list] = None,
+    ) -> str:
         """Apply the tokenizer's chat template if available."""
         if self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template"):
-            message_dicts = [{"role": m.role, "content": m.content} for m in messages]
+            message_dicts = [message_to_openai(m) for m in messages]
+            kwargs = {
+                "tokenize": False,
+                "add_generation_prompt": True,
+            }
+            if enable_thinking is not None:
+                kwargs["enable_thinking"] = enable_thinking
+            if tools:
+                kwargs["tools"] = tools
             try:
-                return self._tokenizer.apply_chat_template(
-                    message_dicts, tokenize=False, add_generation_prompt=True
-                )
+                return self._tokenizer.apply_chat_template(message_dicts, **kwargs)
+            except TypeError:
+                # Older tokenizers may only accept template vars via chat_template_kwargs
+                if enable_thinking is not None:
+                    try:
+                        return self._tokenizer.apply_chat_template(
+                            message_dicts,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            chat_template_kwargs={"enable_thinking": enable_thinking},
+                        )
+                    except TypeError:
+                        pass
+                try:
+                    return self._tokenizer.apply_chat_template(
+                        message_dicts, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
         return self.format_chat_prompt(messages)
@@ -132,24 +184,112 @@ class VLLMBackend(BaseBackend):
     def _build_prompt(self, request: CompletionRequest) -> str:
         """Build prompt from request."""
         if request.messages:
-            return self._apply_chat_template(request.messages)
+            return self._apply_chat_template(
+                request.messages,
+                enable_thinking=request.enable_thinking,
+                tools=request.tools,
+            )
         elif request.prompt:
             return request.prompt
         else:
             raise ValueError("Either prompt or messages must be provided")
 
+    def _engine_input(self, request: CompletionRequest):
+        """Build a vLLM prompt, attaching images/videos when present."""
+        prompt = self._build_prompt(request)
+        mm_data = collect_multimodal_data(request.messages)
+        if not mm_data:
+            return prompt
+        return {"prompt": prompt, "multi_modal_data": mm_data}
+
+    @staticmethod
+    def _tool_engine_kwargs() -> dict:
+        """Enable vLLM native tool calling when this version supports it."""
+        extra: dict = {}
+        try:
+            from vllm import AsyncEngineArgs
+            import inspect
+
+            params = inspect.signature(AsyncEngineArgs.__init__).parameters
+        except Exception:
+            return extra
+        if "enable_auto_tool_choice" in params:
+            extra["enable_auto_tool_choice"] = True
+        if "tool_call_parser" in params:
+            extra["tool_call_parser"] = "hermes"
+        return extra
+
+    def _guided_decoding_kwargs(self, request: CompletionRequest) -> dict:
+        """Constrain generation to an allowed tool JSON object when required."""
+        if request.enable_thinking:
+            return {}
+        schema = guided_tool_schema(request.tools, request.tool_choice)
+        if not schema:
+            return {}
+        try:
+            from vllm.sampling_params import GuidedDecodingParams
+
+            return {"guided_decoding": GuidedDecodingParams(json=schema)}
+        except Exception:
+            pass
+        try:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            return {"structured_outputs": StructuredOutputsParams(json=schema)}
+        except Exception:
+            return {}
+
     def _create_sampling_params(self, request: CompletionRequest):
         """Create vLLM SamplingParams from request config."""
         from vllm import SamplingParams
 
-        return SamplingParams(
-            max_tokens=request.config.max_tokens,
-            temperature=request.config.temperature,
-            top_p=request.config.top_p,
-            top_k=request.config.top_k if request.config.top_k > 0 else -1,
-            repetition_penalty=request.config.repetition_penalty,
-            stop=request.config.stop if request.config.stop else None,
+        kwargs = {
+            "max_tokens": request.config.max_tokens,
+            "temperature": request.config.temperature,
+            "top_p": request.config.top_p,
+            "top_k": request.config.top_k if request.config.top_k > 0 else -1,
+            "repetition_penalty": request.config.repetition_penalty,
+            "stop": request.config.stop if request.config.stop else None,
+        }
+        kwargs.update(self._guided_decoding_kwargs(request))
+        try:
+            return SamplingParams(**kwargs)
+        except TypeError:
+            kwargs.pop("guided_decoding", None)
+            kwargs.pop("structured_outputs", None)
+            return SamplingParams(**kwargs)
+
+    def _finalize_tools(self, text: str, request: CompletionRequest):
+        """Parse and sanitize tool calls against the request allowlist."""
+        if not tools_are_active(request.tools, request.tool_choice):
+            leftover, _ = parse_tool_calls_from_text(text)
+            return leftover or text, None, "stop", []
+
+        leftover, parsed = parse_tool_calls_from_text(text)
+        return apply_tool_policy(
+            leftover if parsed else text,
+            parsed,
+            request.tools,
+            request.tool_choice,
         )
+
+    def _decode_output_text(self, completion) -> str:
+        """Decode completion text while keeping think delimiters.
+
+        vLLM skips special tokens by default; Qwen 3.x marks ``<think>`` /
+        ``</think>`` as special, which concatenates reasoning with the answer.
+        """
+        token_ids = getattr(completion, "token_ids", None)
+        if self._tokenizer is None or not token_ids:
+            return completion.text or ""
+        try:
+            raw = self._tokenizer.decode(list(token_ids), skip_special_tokens=False)
+        except Exception:
+            return completion.text or ""
+        for tok in getattr(self._tokenizer, "all_special_tokens", []) or []:
+            if tok and tok not in THINK_TAGS:
+                raw = raw.replace(tok, "")
+        return raw
 
     @property
     def queue_length(self) -> int:
@@ -167,7 +307,7 @@ class VLLMBackend(BaseBackend):
         if not self._loaded:
             raise RuntimeError("Model not loaded")
 
-        prompt = self._build_prompt(request)
+        prompt = self._engine_input(request)
         sampling_params = self._create_sampling_params(request)
         request_id = str(uuid.uuid4())
 
@@ -181,11 +321,22 @@ class VLLMBackend(BaseBackend):
 
             async for output in self._engine.generate(prompt, sampling_params, request_id):
                 if output.outputs:
-                    full_text = output.outputs[0].text
+                    full_text = self._decode_output_text(output.outputs[0])
                     finish_reason = output.outputs[0].finish_reason or "stop"
                     completion_tokens = len(output.outputs[0].token_ids)
                 if hasattr(output, 'prompt_token_ids'):
                     prompt_tokens = len(output.prompt_token_ids)
+
+            leftover, tool_calls, tool_finish, rejected = self._finalize_tools(
+                full_text, request
+            )
+            engine_finish = finish_reason
+            if tool_calls:
+                full_text = leftover
+                finish_reason = tool_finish
+            elif rejected:
+                full_text = leftover
+                finish_reason = "stop"
 
             return CompletionResponse(
                 text=full_text,
@@ -193,6 +344,9 @@ class VLLMBackend(BaseBackend):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                tool_calls=tool_calls,
+                rejected_tool_names=rejected or None,
+                engine_finish_reason=engine_finish,
             )
         finally:
             self._active_requests.discard(request_id)
@@ -204,30 +358,81 @@ class VLLMBackend(BaseBackend):
         if not self._loaded:
             raise RuntimeError("Model not loaded")
 
-        prompt = self._build_prompt(request)
+        prompt = self._engine_input(request)
         sampling_params = self._create_sampling_params(request)
         request_id = str(uuid.uuid4())
 
         self._active_requests.add(request_id)
         previous_text = ""
+        buffer_for_tools = tools_are_active(request.tools, request.tool_choice)
+        collected_text = ""
+        finish_reason = "stop"
+        prompt_tokens = 0
+        completion_tokens = 0
 
         try:
             async for output in self._engine.generate(prompt, sampling_params, request_id):
+                if hasattr(output, "prompt_token_ids") and output.prompt_token_ids:
+                    prompt_tokens = len(output.prompt_token_ids)
                 if output.outputs:
-                    current_text = output.outputs[0].text
-                    finish_reason = output.outputs[0].finish_reason
+                    current_text = self._decode_output_text(output.outputs[0])
+                    raw_finish = output.outputs[0].finish_reason
+                    if raw_finish:
+                        finish_reason = raw_finish
+                    completion_tokens = len(output.outputs[0].token_ids)
 
-                    # Yield only the new text (delta)
+                    usage = {}
+                    if raw_finish:
+                        usage = {
+                            "prompt_tokens": prompt_tokens or None,
+                            "completion_tokens": completion_tokens or None,
+                            "engine_finish_reason": raw_finish,
+                        }
+
+                    if buffer_for_tools:
+                        collected_text = current_text
+                        continue
+
                     if len(current_text) > len(previous_text):
                         delta = current_text[len(previous_text):]
                         previous_text = current_text
                         yield StreamChunk(
                             text=delta,
-                            finish_reason=finish_reason if finish_reason else None
+                            finish_reason=raw_finish,
+                            **usage,
                         )
-                    elif finish_reason:
-                        # Final chunk with finish reason
-                        yield StreamChunk(text="", finish_reason=finish_reason)
+                    elif raw_finish:
+                        yield StreamChunk(text="", finish_reason=raw_finish, **usage)
+
+            if buffer_for_tools:
+                leftover, parsed, tool_finish, rejected = self._finalize_tools(
+                    collected_text, request
+                )
+                usage = {
+                    "prompt_tokens": prompt_tokens or None,
+                    "completion_tokens": completion_tokens or None,
+                    "engine_finish_reason": finish_reason,
+                }
+                if parsed:
+                    _, answer = split_thinking_content(leftover)
+                    if answer:
+                        yield StreamChunk(text=answer)
+                    for delta in tool_calls_to_stream_deltas(parsed):
+                        yield StreamChunk(tool_calls=delta)
+                    yield StreamChunk(
+                        finish_reason=tool_finish,
+                        rejected_tool_names=rejected or None,
+                        **usage,
+                    )
+                else:
+                    emit_text = leftover if rejected else collected_text
+                    if emit_text:
+                        yield StreamChunk(text=emit_text)
+                    yield StreamChunk(
+                        finish_reason=finish_reason if not rejected else "stop",
+                        rejected_tool_names=rejected or None,
+                        **usage,
+                    )
 
         except asyncio.CancelledError:
             # Request was cancelled, abort it in vLLM

@@ -98,6 +98,21 @@ class ConfigManager:
             )
         """)
 
+        for column, spec in (
+            ("tool_temperature", "REAL DEFAULT 0.0"),
+            ("tool_max_tokens", "INTEGER DEFAULT 2048"),
+            ("tool_top_p", "REAL DEFAULT 1.0"),
+            ("tool_top_k", "INTEGER DEFAULT 20"),
+            ("tool_repetition_penalty", "REAL DEFAULT 1.0"),
+            ("tool_system_prompt", "TEXT"),
+        ):
+            try:
+                await self._db.execute(
+                    f"ALTER TABLE model_config ADD COLUMN {column} {spec}"
+                )
+            except Exception:
+                pass
+
         await self._db.commit()
 
     async def get_setting(self, key: str, default: Any = None) -> Any:
@@ -419,9 +434,13 @@ class ConfigManager:
 
     async def get_model_config(self, model_id: str) -> Optional[dict]:
         """Get configuration for a specific model."""
+        from llm_service.backends.sampling import default_model_config
+
         async with self._db.execute(
             """SELECT display_name, system_prompt, temperature, max_tokens,
-                      top_p, top_k, repetition_penalty, context_length, stop_sequences
+                      top_p, top_k, repetition_penalty, context_length, stop_sequences,
+                      tool_temperature, tool_max_tokens, tool_top_p, tool_top_k,
+                      tool_repetition_penalty, tool_system_prompt
                FROM model_config WHERE model_id = ?""",
             (model_id,)
         ) as cursor:
@@ -433,6 +452,7 @@ class ConfigManager:
                         stop_sequences = json.loads(row[8])
                     except json.JSONDecodeError:
                         stop_sequences = [s.strip() for s in row[8].split(",") if s.strip()]
+                defaults = default_model_config()
                 return {
                     "model_id": model_id,
                     "display_name": row[0],
@@ -444,11 +464,20 @@ class ConfigManager:
                     "repetition_penalty": row[6],
                     "context_length": row[7],
                     "stop_sequences": stop_sequences,
+                    "tool_temperature": row[9] if row[9] is not None else defaults["tool_temperature"],
+                    "tool_max_tokens": row[10] if row[10] is not None else defaults["tool_max_tokens"],
+                    "tool_top_p": row[11] if row[11] is not None else defaults["tool_top_p"],
+                    "tool_top_k": row[12] if row[12] is not None else defaults["tool_top_k"],
+                    "tool_repetition_penalty": row[13] if row[13] is not None else defaults["tool_repetition_penalty"],
+                    "tool_system_prompt": row[14],
                 }
         return None
 
     async def set_model_config(self, model_id: str, config: dict) -> None:
         """Set configuration for a specific model."""
+        from llm_service.backends.sampling import default_model_config
+
+        defaults = default_model_config()
         stop_sequences = config.get("stop_sequences", [])
         if isinstance(stop_sequences, list):
             stop_sequences = json.dumps(stop_sequences)
@@ -457,8 +486,10 @@ class ConfigManager:
             """
             INSERT INTO model_config (
                 model_id, display_name, system_prompt, temperature, max_tokens,
-                top_p, top_k, repetition_penalty, context_length, stop_sequences, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                top_p, top_k, repetition_penalty, context_length, stop_sequences,
+                tool_temperature, tool_max_tokens, tool_top_p, tool_top_k,
+                tool_repetition_penalty, tool_system_prompt, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(model_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 system_prompt = excluded.system_prompt,
@@ -469,19 +500,31 @@ class ConfigManager:
                 repetition_penalty = excluded.repetition_penalty,
                 context_length = excluded.context_length,
                 stop_sequences = excluded.stop_sequences,
+                tool_temperature = excluded.tool_temperature,
+                tool_max_tokens = excluded.tool_max_tokens,
+                tool_top_p = excluded.tool_top_p,
+                tool_top_k = excluded.tool_top_k,
+                tool_repetition_penalty = excluded.tool_repetition_penalty,
+                tool_system_prompt = excluded.tool_system_prompt,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
                 model_id,
                 config.get("display_name"),
                 config.get("system_prompt"),
-                config.get("temperature", 0.7),
-                config.get("max_tokens", 2048),
-                config.get("top_p", 0.9),
-                config.get("top_k", 50),
-                config.get("repetition_penalty", 1.1),
-                config.get("context_length", 4096),
+                config.get("temperature", defaults["temperature"]),
+                config.get("max_tokens", defaults["max_tokens"]),
+                config.get("top_p", defaults["top_p"]),
+                config.get("top_k", defaults["top_k"]),
+                config.get("repetition_penalty", defaults["repetition_penalty"]),
+                config.get("context_length", defaults["context_length"]),
                 stop_sequences,
+                config.get("tool_temperature", defaults["tool_temperature"]),
+                config.get("tool_max_tokens", defaults["tool_max_tokens"]),
+                config.get("tool_top_p", defaults["tool_top_p"]),
+                config.get("tool_top_k", defaults["tool_top_k"]),
+                config.get("tool_repetition_penalty", defaults["tool_repetition_penalty"]),
+                config.get("tool_system_prompt"),
             ),
         )
         await self._db.commit()

@@ -1,15 +1,113 @@
 """Metrics collection and storage service."""
 
 import asyncio
+import json
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import aiosqlite
 
 from llm_service.config import settings
+
+
+def clip_log_text(value: Any, limit: Optional[int] = None) -> Optional[str]:
+    """Store a text body, clipping to ``request_log_max_chars`` if needed."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = json.dumps(value, ensure_ascii=False, default=str)
+    if not value:
+        return value
+    max_chars = limit if limit is not None else int(settings.request_log_max_chars or 1_000_000)
+    max_chars = max(10_000, max_chars)
+    if len(value) <= max_chars:
+        return value
+    omitted = len(value) - max_chars
+    return value[:max_chars] + f"\n\n… [truncated {omitted:,} characters for storage]"
+
+
+def explain_generation_end(
+    *,
+    status: str,
+    finish_reason: Optional[str] = None,
+    engine_finish_reason: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    completion_tokens: int = 0,
+    token_count_source: str = "estimated",
+    stop: Optional[list] = None,
+    error: Optional[str] = None,
+    reasoning_chars: int = 0,
+    answer_chars: int = 0,
+) -> tuple[str, bool]:
+    """Human-readable reason the request ended, plus a truncated flag."""
+    status = (status or "ok").lower()
+    client_reason = (finish_reason or "").strip().lower()
+    engine_reason = (engine_finish_reason or "").strip().lower()
+    hit_length = engine_reason == "length" or client_reason == "length"
+    at_cap = bool(max_tokens) and completion_tokens >= int(max_tokens)
+    truncated = status in {"cancelled", "error"} or hit_length or at_cap or engine_reason in {
+        "abort",
+        "timeout",
+    }
+
+    count_note = (
+        f"{completion_tokens} completion tokens"
+        + (f" of max_tokens={max_tokens}" if max_tokens else "")
+        + ("" if token_count_source == "engine" else " (character-estimated; not engine counts)")
+    )
+
+    if status == "cancelled":
+        return (
+            "Client disconnected or the request was aborted before generation finished. "
+            f"Partial output saved ({count_note}).",
+            True,
+        )
+    if status == "error":
+        return (f"Generation failed: {error or 'unknown error'}. {count_note}.", True)
+    if engine_reason == "timeout" or client_reason == "timeout":
+        return (f"Backend stream timed out. Partial output saved ({count_note}).", True)
+    if engine_reason == "abort" or client_reason == "abort":
+        return (f"The engine aborted the request. Partial output saved ({count_note}).", True)
+    if hit_length or at_cap:
+        think_note = ""
+        if reasoning_chars and reasoning_chars >= max(answer_chars, 1) * 2:
+            think_note = (
+                " Most of the output is inside <think>…</think>, so the visible answer "
+                "can look unfinished even though the token budget was spent."
+            )
+        return (
+            f"Hit the max token cap ({count_note}). The response is truncated; raise "
+            "max_completion_tokens (Grok) or the model's max_tokens / tool_max_tokens."
+            f"{think_note}",
+            True,
+        )
+    if client_reason == "tool_calls":
+        extra = ""
+        if engine_reason == "length":
+            extra = " Engine also reported length, so the tool call may be incomplete."
+        return (f"Model emitted a tool call and stopped for the tool loop. {count_note}.{extra}", truncated)
+    if client_reason == "stop" or engine_reason == "stop":
+        stops = ""
+        if stop:
+            stops = f" Configured stop sequences: {stop}."
+        return (
+            f"Model emitted an end-of-sequence token (natural stop). {count_note}.{stops}",
+            False,
+        )
+    if client_reason.startswith("error") or engine_reason.startswith("error"):
+        return (f"Engine error ({finish_reason or engine_finish_reason}). {count_note}.", True)
+    if not finish_reason and not engine_finish_reason:
+        return (
+            f"Stream ended without a finish_reason. Output may be partial. {count_note}.",
+            True,
+        )
+    return (
+        f"Finished with finish_reason={finish_reason or 'none'} "
+        f"(engine={engine_finish_reason or 'none'}). {count_note}.",
+        truncated,
+    )
 
 
 @dataclass
@@ -100,9 +198,61 @@ class MetricsService:
             ON metrics_minute(timestamp)
         """)
 
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS request_logs (
+                id TEXT PRIMARY KEY,
+                timestamp REAL NOT NULL,
+                model TEXT,
+                endpoint TEXT,
+                stream INTEGER DEFAULT 0,
+                status TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                duration_ms REAL,
+                tokens_per_second REAL,
+                finish_reason TEXT,
+                has_tools INTEGER DEFAULT 0,
+                tool_choice TEXT,
+                tool_names TEXT,
+                rejected_tool_names TEXT,
+                prompt_preview TEXT,
+                completion_preview TEXT,
+                error TEXT
+            )
+        """)
+        for column, ddl in (
+            ("prompt_text", "TEXT"),
+            ("completion_text", "TEXT"),
+            ("reasoning_text", "TEXT"),
+            ("messages_json", "TEXT"),
+            ("sampling_json", "TEXT"),
+            ("stop_explanation", "TEXT"),
+            ("max_tokens", "INTEGER"),
+            ("engine_finish_reason", "TEXT"),
+            ("token_count_source", "TEXT"),
+            ("truncated", "INTEGER DEFAULT 0"),
+            ("tool_calls_json", "TEXT"),
+        ):
+            try:
+                await self._db.execute(
+                    f"ALTER TABLE request_logs ADD COLUMN {column} {ddl}"
+                )
+            except Exception:
+                pass
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_request_logs_timestamp
+            ON request_logs(timestamp DESC)
+        """)
+
         await self._db.commit()
 
-    async def record_request(self, prompt_tokens: int = 0, completion_tokens: int = 0, tokens_per_second: float = 0.0) -> None:
+    async def record_request(
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        tokens_per_second: float = 0.0,
+        **log: Any,
+    ) -> None:
         """Record a completed request with token counts and generation speed."""
         async with self._lock:
             now = int(time.time())
@@ -123,6 +273,257 @@ class MetricsService:
                 self._current_tps_max = max(self._current_tps_max, tokens_per_second)
                 self._current_tps_sum += tokens_per_second
                 self._current_tps_count += 1
+
+            if log:
+                await self._write_call_log(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    tokens_per_second=tokens_per_second,
+                    log=log,
+                )
+
+    async def _write_call_log(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        tokens_per_second: float,
+        log: dict[str, Any],
+    ) -> None:
+        request_id = log.get("request_id") or f"req-{int(time.time() * 1000)}"
+        tool_names = log.get("tool_names") or []
+        rejected = log.get("rejected_tool_names") or []
+        tool_calls = log.get("tool_calls")
+        sampling = log.get("sampling")
+        messages = log.get("messages")
+        truncated = 1 if log.get("truncated") else 0
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO request_logs (
+                id, timestamp, model, endpoint, stream, status,
+                prompt_tokens, completion_tokens, duration_ms, tokens_per_second,
+                finish_reason, has_tools, tool_choice, tool_names, rejected_tool_names,
+                prompt_preview, completion_preview, error,
+                prompt_text, completion_text, reasoning_text, messages_json, sampling_json,
+                stop_explanation, max_tokens, engine_finish_reason, token_count_source,
+                truncated, tool_calls_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                log.get("timestamp") or time.time(),
+                log.get("model"),
+                log.get("endpoint") or "chat.completions",
+                1 if log.get("stream") else 0,
+                log.get("status") or "ok",
+                prompt_tokens,
+                completion_tokens,
+                log.get("duration_ms"),
+                round(tokens_per_second, 2) if tokens_per_second else 0,
+                log.get("finish_reason"),
+                1 if log.get("has_tools") else 0,
+                log.get("tool_choice"),
+                json.dumps(tool_names) if tool_names else None,
+                json.dumps(rejected) if rejected else None,
+                log.get("prompt_preview"),
+                log.get("completion_preview"),
+                log.get("error"),
+                clip_log_text(log.get("prompt_text")),
+                clip_log_text(log.get("completion_text")),
+                clip_log_text(log.get("reasoning_text")),
+                clip_log_text(
+                    json.dumps(messages, ensure_ascii=False, default=str) if messages else None
+                ),
+                json.dumps(sampling, ensure_ascii=False, default=str) if sampling else None,
+                log.get("stop_explanation"),
+                log.get("max_tokens"),
+                log.get("engine_finish_reason"),
+                log.get("token_count_source"),
+                truncated,
+                json.dumps(tool_calls, ensure_ascii=False, default=str) if tool_calls else None,
+            ),
+        )
+        await self._db.commit()
+        await self._trim_call_logs()
+
+    async def _trim_call_logs(self) -> None:
+        max_rows = max(100, int(settings.request_log_max_rows or 5000))
+        async with self._db.execute("SELECT COUNT(*) FROM request_logs") as cursor:
+            count = (await cursor.fetchone())[0]
+        if count <= max_rows:
+            return
+        overflow = count - max_rows
+        async with self._db.execute(
+            "SELECT id FROM request_logs ORDER BY timestamp ASC LIMIT ?",
+            (overflow,),
+        ) as cursor:
+            drop = [row[0] for row in await cursor.fetchall()]
+        if not drop:
+            return
+        placeholders = ",".join("?" * len(drop))
+        await self._db.execute(
+            f"DELETE FROM request_logs WHERE id IN ({placeholders})",
+            drop,
+        )
+        await self._db.commit()
+
+    _LIST_COLUMNS = (
+        "id",
+        "timestamp",
+        "model",
+        "endpoint",
+        "stream",
+        "status",
+        "prompt_tokens",
+        "completion_tokens",
+        "duration_ms",
+        "tokens_per_second",
+        "finish_reason",
+        "has_tools",
+        "tool_choice",
+        "tool_names",
+        "rejected_tool_names",
+        "prompt_preview",
+        "completion_preview",
+        "error",
+        "stop_explanation",
+        "max_tokens",
+        "engine_finish_reason",
+        "token_count_source",
+        "truncated",
+    )
+    _DETAIL_COLUMNS = _LIST_COLUMNS + (
+        "prompt_text",
+        "completion_text",
+        "reasoning_text",
+        "messages_json",
+        "sampling_json",
+        "tool_calls_json",
+    )
+
+    @classmethod
+    def _row_to_call(cls, row: tuple, columns: Optional[tuple[str, ...]] = None) -> dict:
+        def _loads_list(value):
+            if not value:
+                return []
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, list) else []
+            except json.JSONDecodeError:
+                return []
+
+        def _loads_any(value):
+            if not value:
+                return None
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+
+        cols = columns or cls._DETAIL_COLUMNS
+        data = dict(zip(cols, row))
+        call = {
+            "id": data.get("id"),
+            "timestamp": data.get("timestamp"),
+            "model": data.get("model"),
+            "endpoint": data.get("endpoint"),
+            "stream": bool(data.get("stream")),
+            "status": data.get("status"),
+            "prompt_tokens": data.get("prompt_tokens") or 0,
+            "completion_tokens": data.get("completion_tokens") or 0,
+            "duration_ms": data.get("duration_ms"),
+            "tokens_per_second": data.get("tokens_per_second"),
+            "finish_reason": data.get("finish_reason"),
+            "has_tools": bool(data.get("has_tools")),
+            "tool_choice": data.get("tool_choice"),
+            "tool_names": _loads_list(data.get("tool_names")),
+            "rejected_tool_names": _loads_list(data.get("rejected_tool_names")),
+            "prompt_preview": data.get("prompt_preview"),
+            "completion_preview": data.get("completion_preview"),
+            "error": data.get("error"),
+            "stop_explanation": data.get("stop_explanation"),
+            "max_tokens": data.get("max_tokens"),
+            "engine_finish_reason": data.get("engine_finish_reason"),
+            "token_count_source": data.get("token_count_source"),
+            "truncated": bool(data.get("truncated")),
+        }
+        if "prompt_text" in data:
+            call["prompt_text"] = data.get("prompt_text")
+            call["completion_text"] = data.get("completion_text")
+            call["reasoning_text"] = data.get("reasoning_text")
+            call["messages"] = _loads_any(data.get("messages_json"))
+            call["sampling"] = _loads_any(data.get("sampling_json"))
+            call["tool_calls"] = _loads_any(data.get("tool_calls_json"))
+        return call
+
+    async def list_call_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        model: Optional[str] = None,
+        status: Optional[str] = None,
+        has_tools: Optional[bool] = None,
+        q: Optional[str] = None,
+    ) -> dict:
+        """Return recent API call logs with optional filters."""
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if model:
+            clauses.append("model = ?")
+            params.append(model)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if has_tools is not None:
+            clauses.append("has_tools = ?")
+            params.append(1 if has_tools else 0)
+        if q:
+            clauses.append(
+                "(prompt_preview LIKE ? OR completion_preview LIKE ? OR prompt_text LIKE ? "
+                "OR completion_text LIKE ? OR stop_explanation LIKE ? OR tool_names LIKE ? "
+                "OR rejected_tool_names LIKE ? OR error LIKE ?)"
+            )
+            like = f"%{q}%"
+            params.extend([like] * 8)
+        where = " AND ".join(clauses)
+
+        async with self._db.execute(
+            f"SELECT COUNT(*) FROM request_logs WHERE {where}", params
+        ) as cursor:
+            total = (await cursor.fetchone())[0]
+
+        columns = ", ".join(self._LIST_COLUMNS)
+        async with self._db.execute(
+            f"""
+            SELECT {columns} FROM request_logs
+            WHERE {where}
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "calls": [self._row_to_call(row, self._LIST_COLUMNS) for row in rows],
+        }
+
+    async def get_call_log(self, call_id: str) -> Optional[dict]:
+        columns = ", ".join(self._DETAIL_COLUMNS)
+        async with self._db.execute(
+            f"SELECT {columns} FROM request_logs WHERE id = ?", (call_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_call(row, self._DETAIL_COLUMNS)
+
+    async def clear_call_logs(self) -> None:
+        await self._db.execute("DELETE FROM request_logs")
+        await self._db.commit()
 
     async def _flush_current_second(self) -> None:
         """Flush current second data to buffer and potentially to DB."""

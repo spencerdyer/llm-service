@@ -60,13 +60,17 @@ class ModelInfo:
         # Thinking/reasoning patterns
         thinking_patterns = [
             "thinking", "reason", "-r1", "deepseek-r1", "qwq",
-            "o1-", "o3-", "reflection", "cot", "chain-of-thought"
+            "o1-", "o3-", "reflection", "cot", "chain-of-thought",
+            "qwen3", "qwen3.5", "qwen3.6", "qwen3.8", "qwen3_5", "qwen3_6", "qwen3_8",
         ]
         if any(p in combined for p in thinking_patterns):
             caps["thinking"] = True
 
         # Tool use patterns
-        tool_patterns = ["instruct", "chat", "tool", "function", "agent"]
+        tool_patterns = [
+            "instruct", "chat", "tool", "function", "agent",
+            "qwen3", "qwen3.5", "qwen3.6", "qwen3.8",
+        ]
         if any(p in combined for p in tool_patterns):
             caps["tool_use"] = True
 
@@ -236,14 +240,18 @@ class ModelManager:
         # Thinking/reasoning model patterns
         thinking_patterns = [
             "thinking", "reason", "-r1", "deepseek-r1", "qwq",
-            "o1-", "o3-", "reflection", "cot", "chain-of-thought"
+            "o1-", "o3-", "reflection", "cot", "chain-of-thought",
+            "qwen3", "qwen3.5", "qwen3.6", "qwen3.8", "qwen3_5", "qwen3_6", "qwen3_8",
         ]
         if any(p in model_lower for p in thinking_patterns):
+            capabilities["thinking"] = True
+        elif any(p in tags_lower for p in thinking_patterns):
             capabilities["thinking"] = True
 
         # Tool use detection - instruction-tuned models generally support tools
         tool_patterns = [
-            "instruct", "chat", "tool", "function", "agent"
+            "instruct", "chat", "tool", "function", "agent",
+            "qwen3", "qwen3.5", "qwen3.6", "qwen3.8",
         ]
         tool_tags = ["tool-use", "function-calling", "agents"]
 

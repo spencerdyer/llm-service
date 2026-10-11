@@ -58,11 +58,17 @@ class SetActiveModelRequest(BaseModel):
 class ModelConfigRequest(BaseModel):
     display_name: Optional[str] = None
     system_prompt: Optional[str] = None
+    tool_system_prompt: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 2048
     top_p: float = 0.9
     top_k: int = 50
     repetition_penalty: float = 1.1
+    tool_temperature: float = 0.0
+    tool_max_tokens: int = 2048
+    tool_top_p: float = 1.0
+    tool_top_k: int = 20
+    tool_repetition_penalty: float = 1.0
     context_length: int = 8192
     stop_sequences: list[str] = []
 
@@ -660,18 +666,11 @@ async def get_model_config(request: Request, model_id: str):
         return config
 
     # Return defaults if no config exists
-    return {
-        "model_id": model_id,
-        "display_name": model.name,
-        "system_prompt": None,
-        "temperature": 0.7,
-        "max_tokens": 2048,
-        "top_p": 0.9,
-        "top_k": 50,
-        "repetition_penalty": 1.1,
-        "context_length": 8192,
-        "stop_sequences": [],
-    }
+    from llm_service.backends.sampling import default_model_config
+
+    defaults = default_model_config(display_name=model.name)
+    defaults["model_id"] = model_id
+    return defaults
 
 
 @api_router.put("/models/{model_id}/config")
@@ -800,6 +799,56 @@ async def get_metrics_summary(request: Request):
     if not metrics:
         raise HTTPException(status_code=503, detail="Metrics service not available")
     return await metrics.get_summary()
+
+
+@api_router.get("/metrics/calls")
+async def list_call_logs(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    model: Optional[str] = None,
+    status: Optional[str] = None,
+    has_tools: Optional[bool] = None,
+    q: Optional[str] = None,
+):
+    """List recent API call logs for the analytics page."""
+    metrics = get_metrics_service(request)
+    if not metrics:
+        raise HTTPException(status_code=503, detail="Metrics service not available")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    return await metrics.list_call_logs(
+        limit=limit,
+        offset=offset,
+        model=model,
+        status=status,
+        has_tools=has_tools,
+        q=q,
+    )
+
+
+@api_router.get("/metrics/calls/{call_id}")
+async def get_call_log(request: Request, call_id: str):
+    """Get a single API call log."""
+    metrics = get_metrics_service(request)
+    if not metrics:
+        raise HTTPException(status_code=503, detail="Metrics service not available")
+    call = await metrics.get_call_log(call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call log not found")
+    return call
+
+
+@api_router.delete("/metrics/calls")
+async def clear_call_logs(request: Request):
+    """Delete stored API call logs."""
+    metrics = get_metrics_service(request)
+    if not metrics:
+        raise HTTPException(status_code=503, detail="Metrics service not available")
+    await metrics.clear_call_logs()
+    return {"status": "cleared"}
 
 
 @api_router.get("/metrics/stream")

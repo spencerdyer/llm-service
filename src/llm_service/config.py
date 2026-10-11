@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     max_model_len: int = 8192
     gpu_memory_utilization: float = 0.85  # For vLLM - leave headroom for display/other GPU processes
 
+    # Tool calling: clamp temperature when the request includes tools so
+    # local models are less likely to invent names from other agent stacks.
+    tool_use_max_temperature: float = 0.2
+    request_log_max_rows: int = 5000
+    # Cap stored prompt/completion bodies so a 32k dump cannot blow up the DB.
+    request_log_max_chars: int = 1_000_000
+
     @property
     def effective_models_dir(self) -> Path:
         """Get the effective models directory."""

@@ -164,18 +164,105 @@
         .test-sidebar { display: flex; flex-direction: column; gap: 1rem; }
         .test-main { display: flex; flex-direction: column; }
 
-        .chat-container { display: flex; flex-direction: column; height: 500px; }
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: min(70vh, 720px);
+            min-height: 320px;
+            max-height: 92vh;
+            resize: vertical;
+            overflow: hidden;
+            position: relative;
+        }
+        .chat-container::after {
+            content: '';
+            position: absolute;
+            right: 6px;
+            bottom: 4px;
+            width: 12px;
+            height: 12px;
+            pointer-events: none;
+            opacity: 0.35;
+            background:
+                linear-gradient(135deg, transparent 50%, var(--text-secondary) 50%) no-repeat bottom right / 8px 8px,
+                linear-gradient(135deg, transparent 55%, var(--text-secondary) 55%) no-repeat bottom 2px right 4px / 5px 5px;
+        }
         .chat-messages {
-            flex: 1; overflow-y: auto; padding: 1rem; background: var(--bg);
-            border-radius: 0.375rem; margin-bottom: 1rem;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 1rem;
+            background: var(--bg);
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            border: 1px solid var(--border);
         }
         .chat-message { margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 0.5rem; max-width: 85%; }
         .chat-message.user { background: var(--accent); margin-left: auto; }
         .chat-message.assistant { background: var(--bg-secondary); border: 1px solid var(--border); }
         .chat-message-role { font-size: 0.7rem; text-transform: uppercase; opacity: 0.7; margin-bottom: 0.25rem; }
         .chat-message-content { white-space: pre-wrap; }
-        .chat-input-area { display: flex; gap: 0.5rem; }
-        .chat-input-area textarea { flex: 1; resize: none; min-height: 60px; }
+        .thinking-fold {
+            margin-bottom: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            background: var(--bg);
+            overflow: hidden;
+        }
+        .thinking-fold > summary {
+            cursor: pointer;
+            list-style: none;
+            padding: 0.45rem 0.65rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .thinking-fold > summary::-webkit-details-marker { display: none; }
+        .thinking-fold > summary::before {
+            content: '▸';
+            display: inline-block;
+            transition: transform 0.15s ease;
+            font-size: 0.7rem;
+        }
+        .thinking-fold[open] > summary::before { transform: rotate(90deg); }
+        .thinking-fold > summary .thinking-status {
+            font-weight: 500;
+            text-transform: none;
+            letter-spacing: 0;
+            opacity: 0.85;
+        }
+        .thinking-content {
+            white-space: pre-wrap;
+            padding: 0.65rem 0.75rem 0.75rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            max-height: min(40vh, 360px);
+            overflow-y: auto;
+            line-height: 1.45;
+        }
+        .answer-content { white-space: pre-wrap; }
+        .answer-content { white-space: pre-wrap; }
+        .chat-input-area { display: flex; gap: 0.5rem; align-items: flex-end; flex-shrink: 0; }
+        .chat-input-area textarea {
+            flex: 1;
+            resize: vertical;
+            min-height: 60px;
+            max-height: 200px;
+        }
+        .chat-resize-hint {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-align: right;
+            margin: -0.35rem 0 0.5rem;
+            opacity: 0.75;
+        }
 
         .response-info {
             display: flex; gap: 1.5rem; padding: 0.75rem 1rem; background: var(--bg);
@@ -190,6 +277,89 @@
         .quick-test:hover { border-color: var(--accent); }
         .quick-test-title { font-weight: 500; font-size: 0.875rem; margin-bottom: 0.25rem; }
         .quick-test-desc { font-size: 0.75rem; color: var(--text-secondary); }
+
+        .log-table-wrap { overflow-x: auto; }
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        .log-table th, .log-table td {
+            text-align: left;
+            padding: 0.55rem 0.65rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        .log-table th {
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .log-table tbody tr { cursor: pointer; }
+        .log-table tbody tr:hover { background: var(--bg-hover); }
+        .log-table tbody tr.active { background: rgba(59, 130, 246, 0.12); }
+        .log-preview {
+            max-width: 280px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .log-model {
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75rem;
+        }
+        .log-detail {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+        }
+        .log-detail.open { display: block; }
+        .log-detail pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-secondary);
+            margin-top: 0.35rem;
+            max-height: 28rem;
+            overflow: auto;
+            background: var(--bg-hover);
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            padding: 0.75rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75rem;
+        }
+        .log-stop {
+            margin-top: 0.75rem;
+            padding: 0.75rem 0.9rem;
+            border-radius: 0.375rem;
+            border: 1px solid var(--border);
+            background: var(--bg-hover);
+        }
+        .log-stop.truncated {
+            border-color: var(--warning, #f59e0b);
+            background: rgba(245, 158, 11, 0.12);
+        }
+        .log-detail-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .log-toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .log-toolbar input, .log-toolbar select { width: auto; min-width: 8rem; }
+        .log-empty { color: var(--text-secondary); padding: 1.25rem 0; text-align: center; }
 
         .toggle-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0; }
         .toggle-label { flex: 1; font-size: 0.875rem; }
@@ -290,7 +460,7 @@
         .modal-overlay.active { opacity: 1; visibility: visible; }
         .modal {
             background: var(--bg-secondary); border-radius: 0.75rem;
-            border: 1px solid var(--border); width: 90%; max-width: 600px;
+            border: 1px solid var(--border); width: 90%; max-width: 720px;
             max-height: 90vh; overflow-y: auto; transform: scale(0.95);
             transition: transform 0.2s;
         }
@@ -794,6 +964,14 @@
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
+                            <div class="toggle-row">
+                                <span class="toggle-label">Thinking</span>
+                                <label class="toggle">
+                                    <input type="checkbox" id="thinking-toggle" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="form-help" style="margin-top: 0;">For hybrid models (e.g. Qwen3.x). Off skips the reasoning phase.</div>
                         </div>
 
                         <div class="card" style="margin-bottom: 0;">
@@ -826,7 +1004,7 @@
                                 </span>
                             </div>
 
-                            <div class="chat-container">
+                            <div class="chat-container" id="chat-container">
                                 <div class="chat-messages" id="chat-messages">
                                     <div class="empty-state"><p>Send a message to start testing</p></div>
                                 </div>
@@ -836,6 +1014,7 @@
                                     <button onclick="sendMessage()" id="send-btn">Send</button>
                                 </div>
                             </div>
+                            <div class="chat-resize-hint">Drag the bottom-right corner to resize the chat</div>
 
                             <div class="response-info" id="response-info" style="display: none;">
                                 <div class="response-info-item">
@@ -924,6 +1103,56 @@
                     <h2>Generation Speed (Tokens/Second)</h2>
                     <div style="height: 250px; position: relative;">
                         <canvas id="tps-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.75rem; flex-wrap: wrap;">
+                    <h2 style="margin-bottom: 0;">Call Logs</h2>
+                    <div class="log-toolbar">
+                        <input id="call-log-search" type="text" placeholder="Search prompts, tools, errors" onkeydown="if(event.key==='Enter') loadCallLogs(0)">
+                        <select id="call-log-status" onchange="loadCallLogs(0)">
+                            <option value="">All statuses</option>
+                            <option value="ok">ok</option>
+                            <option value="error">error</option>
+                            <option value="cancelled">cancelled</option>
+                        </select>
+                        <select id="call-log-tools" onchange="loadCallLogs(0)">
+                            <option value="">All calls</option>
+                            <option value="true">With tools</option>
+                            <option value="false">No tools</option>
+                        </select>
+                        <button class="btn-secondary btn-small" onclick="loadCallLogs(callLogOffset)">Refresh</button>
+                        <button class="btn-secondary btn-small" onclick="clearCallLogs()">Clear</button>
+                    </div>
+                </div>
+                <div id="call-log-empty" class="log-empty">No API calls recorded yet.</div>
+                <div id="call-log-table-wrap" class="log-table-wrap" style="display: none;">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Model</th>
+                                <th>Endpoint</th>
+                                <th>Tokens</th>
+                                <th>Duration</th>
+                                <th>Finish</th>
+                                <th>Tools</th>
+                                <th>Status</th>
+                                <th>Why it ended</th>
+                                <th>Prompt</th>
+                            </tr>
+                        </thead>
+                        <tbody id="call-log-body"></tbody>
+                    </table>
+                </div>
+                <div id="call-log-detail" class="log-detail"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem;">
+                    <div id="call-log-count" style="color: var(--text-secondary); font-size: 0.75rem;"></div>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn-secondary btn-small" id="call-log-prev" onclick="loadCallLogs(Math.max(0, callLogOffset - callLogLimit))" disabled>Prev</button>
+                        <button class="btn-secondary btn-small" id="call-log-next" onclick="loadCallLogs(callLogOffset + callLogLimit)" disabled>Next</button>
                     </div>
                 </div>
             </div>
@@ -1016,8 +1245,17 @@
                 <div class="form-group">
                     <label>System Prompt</label>
                     <textarea id="config-system-prompt" rows="3" placeholder="Optional default system prompt..."></textarea>
-                    <div class="form-help">Default system message prepended to conversations</div>
+                    <div class="form-help">Used only when the caller does not send a system message. Apps can always set this remotely with a <code>system</code> message or the top-level <code>system</code> field.</div>
                 </div>
+
+                <div class="form-group">
+                    <label>Tool System Prompt</label>
+                    <textarea id="config-tool-system-prompt" rows="3" placeholder="Optional extra instructions for tool/agent requests..."></textarea>
+                    <div class="form-help">Added only when the request includes tools. Does not replace a system prompt sent by the caller.</div>
+                </div>
+
+                <h3 style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 1.25rem 0 0.75rem;">Text generation</h3>
+                <p class="form-help" style="margin-bottom: 0.75rem;">Used for chat/completions without tools. Request temperature/top_p/top_k override these.</p>
 
                 <div class="form-row-2">
                     <div class="form-group">
@@ -1056,6 +1294,41 @@
                         <input type="number" id="config-context-length" min="512" max="131072" step="512" value="4096">
                         <div class="form-help">Max context window size. Applied on next model load (vLLM/GGUF).</div>
                     </div>
+                </div>
+
+                <h3 style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 1.25rem 0 0.75rem;">Tool calling</h3>
+                <p class="form-help" style="margin-bottom: 0.75rem;">Used automatically when the request includes tools (Grok/agents). Caller temperature is ignored unless <code>sampling_profile=request</code>.</p>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <input type="number" id="config-tool-temperature" min="0" max="2" step="0.05" value="0.0">
+                        <div class="form-help">Keep low so the model sticks to real tool names</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Tokens</label>
+                        <input type="number" id="config-tool-max-tokens" min="1" max="32768" step="1" value="2048">
+                        <div class="form-help">Overridden by the request's max_completion_tokens if set</div>
+                    </div>
+                </div>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Top P</label>
+                        <input type="number" id="config-tool-top-p" min="0" max="1" step="0.05" value="1.0">
+                        <div class="form-help">1.0 is typical with temperature 0</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Top K</label>
+                        <input type="number" id="config-tool-top-k" min="1" max="100" step="1" value="20">
+                        <div class="form-help">Smaller k keeps tool JSON more stable</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Repetition Penalty</label>
+                    <input type="number" id="config-tool-repetition-penalty" min="1" max="2" step="0.05" value="1.0">
+                    <div class="form-help">1.0 recommended so structured tool JSON is not penalized</div>
                 </div>
 
                 <div class="form-group">
@@ -1746,11 +2019,17 @@
                 document.getElementById('config-model-id').value = modelId;
                 document.getElementById('config-display-name').value = config.display_name || '';
                 document.getElementById('config-system-prompt').value = config.system_prompt || '';
+                document.getElementById('config-tool-system-prompt').value = config.tool_system_prompt || '';
                 document.getElementById('config-temperature').value = config.temperature ?? 0.7;
                 document.getElementById('config-max-tokens').value = config.max_tokens ?? 2048;
                 document.getElementById('config-top-p').value = config.top_p ?? 0.9;
                 document.getElementById('config-top-k').value = config.top_k ?? 50;
                 document.getElementById('config-repetition-penalty').value = config.repetition_penalty ?? 1.1;
+                document.getElementById('config-tool-temperature').value = config.tool_temperature ?? 0.0;
+                document.getElementById('config-tool-max-tokens').value = config.tool_max_tokens ?? 2048;
+                document.getElementById('config-tool-top-p').value = config.tool_top_p ?? 1.0;
+                document.getElementById('config-tool-top-k').value = config.tool_top_k ?? 20;
+                document.getElementById('config-tool-repetition-penalty').value = config.tool_repetition_penalty ?? 1.0;
                 document.getElementById('config-context-length').value = config.context_length ?? 4096;
                 document.getElementById('config-stop-sequences').value = (config.stop_sequences || []).join(', ');
 
@@ -1772,11 +2051,17 @@
             const config = {
                 display_name: document.getElementById('config-display-name').value || null,
                 system_prompt: document.getElementById('config-system-prompt').value || null,
+                tool_system_prompt: document.getElementById('config-tool-system-prompt').value || null,
                 temperature: parseFloat(document.getElementById('config-temperature').value),
                 max_tokens: parseInt(document.getElementById('config-max-tokens').value),
                 top_p: parseFloat(document.getElementById('config-top-p').value),
                 top_k: parseInt(document.getElementById('config-top-k').value),
                 repetition_penalty: parseFloat(document.getElementById('config-repetition-penalty').value),
+                tool_temperature: parseFloat(document.getElementById('config-tool-temperature').value),
+                tool_max_tokens: parseInt(document.getElementById('config-tool-max-tokens').value),
+                tool_top_p: parseFloat(document.getElementById('config-tool-top-p').value),
+                tool_top_k: parseInt(document.getElementById('config-tool-top-k').value),
+                tool_repetition_penalty: parseFloat(document.getElementById('config-tool-repetition-penalty').value),
                 context_length: parseInt(document.getElementById('config-context-length').value),
                 stop_sequences: stopSequences,
             };
@@ -2083,6 +2368,39 @@
         // Chat functionality
         let chatMessages = [];
         let lastResponseInfo = null;
+        const CHAT_HEIGHT_KEY = 'llm-service-chat-height';
+
+        function initResizableChat() {
+            const container = document.getElementById('chat-container');
+            if (!container) return;
+
+            try {
+                const saved = localStorage.getItem(CHAT_HEIGHT_KEY);
+                if (saved) {
+                    const height = parseInt(saved, 10);
+                    if (Number.isFinite(height) && height >= 320) {
+                        container.style.height = `${height}px`;
+                    }
+                }
+            } catch {}
+
+            // Persist height after the user finishes dragging the resize handle
+            const observer = new ResizeObserver((entries) => {
+                for (const entry of entries) {
+                    const height = Math.round(entry.contentRect.height);
+                    if (height >= 320) {
+                        try { localStorage.setItem(CHAT_HEIGHT_KEY, String(height)); } catch {}
+                    }
+                }
+            });
+            observer.observe(container);
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initResizableChat);
+        } else {
+            initResizableChat();
+        }
 
         function clearChat() {
             chatMessages = [];
@@ -2090,8 +2408,87 @@
             document.getElementById('response-info').style.display = 'none';
         }
 
-        function addMessage(role, content) {
-            chatMessages.push({ role, content });
+        function splitThinking(text, { streaming = false } = {}) {
+            const pairs = [
+                ['<think>', '</think>'],
+                ['<redacted_thinking>', '</redacted_thinking>'],
+                ['<thinking>', '</thinking>'],
+            ];
+            let best = null;
+            for (const [openTag, closeTag] of pairs) {
+                const openIdx = text.indexOf(openTag);
+                const closeIdx = text.indexOf(closeTag);
+                if (openIdx === -1 && closeIdx === -1) continue;
+                const signal = openIdx === -1
+                    ? closeIdx
+                    : (closeIdx === -1 ? openIdx : Math.min(openIdx, closeIdx));
+                if (best === null || signal < best.signal) {
+                    best = { signal, openIdx, closeIdx, openTag, closeTag };
+                }
+            }
+            if (!best) {
+                if (streaming && text) {
+                    return { thinking: text, answer: '', thinkingComplete: false };
+                }
+                return { thinking: null, answer: text, thinkingComplete: true };
+            }
+            if (best.openIdx !== -1) {
+                const afterOpen = best.openIdx + best.openTag.length;
+                const prefix = text.slice(0, best.openIdx);
+                if (best.closeIdx === -1 || best.closeIdx < afterOpen) {
+                    return {
+                        thinking: text.slice(afterOpen),
+                        answer: prefix.trim(),
+                        thinkingComplete: false,
+                    };
+                }
+                let answer = text.slice(best.closeIdx + best.closeTag.length).replace(/^\n+/, '');
+                const trimmedPrefix = prefix.trim();
+                if (trimmedPrefix) {
+                    answer = answer ? `${trimmedPrefix}\n${answer}` : trimmedPrefix;
+                }
+                return {
+                    thinking: text.slice(afterOpen, best.closeIdx).trim() || null,
+                    answer,
+                    thinkingComplete: true,
+                };
+            }
+            return {
+                thinking: text.slice(0, best.closeIdx).trim() || null,
+                answer: text.slice(best.closeIdx + best.closeTag.length).replace(/^\n+/, ''),
+                thinkingComplete: true,
+            };
+        }
+
+        function renderAssistantContent(container, text, { streaming = false, expectThinking = false } = {}) {
+            const { thinking, answer, thinkingComplete } = splitThinking(text || '', {
+                streaming: streaming && expectThinking,
+            });
+            const showThinking = thinking !== null && thinking !== '';
+
+            if (!showThinking) {
+                container.textContent = text || '';
+                return;
+            }
+
+            const shouldOpen = streaming && !thinkingComplete;
+            container.innerHTML = `
+                <details class="thinking-fold"${shouldOpen ? ' open' : ''}>
+                    <summary>
+                        <span>${thinkingComplete ? 'Thoughts' : 'Thinking'}</span>
+                        <span class="thinking-status">${thinkingComplete ? '' : '…'}</span>
+                    </summary>
+                    <div class="thinking-content"></div>
+                </details>
+                <div class="answer-content"></div>
+            `;
+            container.querySelector('.thinking-content').textContent = thinking;
+            container.querySelector('.answer-content').textContent = answer;
+        }
+
+        function addMessage(role, content, { rawContent = null } = {}) {
+            const stored = rawContent != null ? rawContent : content;
+            chatMessages.push({ role, content: stored });
             const container = document.getElementById('chat-messages');
             const emptyState = container.querySelector('.empty-state');
             if (emptyState) emptyState.remove();
@@ -2099,7 +2496,12 @@
             const msgDiv = document.createElement('div');
             msgDiv.className = `chat-message ${role}`;
             msgDiv.innerHTML = `<div class="chat-message-role">${role}</div><div class="chat-message-content"></div>`;
-            msgDiv.querySelector('.chat-message-content').textContent = content;
+            const contentDiv = msgDiv.querySelector('.chat-message-content');
+            if (role === 'assistant') {
+                renderAssistantContent(contentDiv, stored, { streaming: false });
+            } else {
+                contentDiv.textContent = content;
+            }
             container.appendChild(msgDiv);
             container.scrollTop = container.scrollHeight;
             return msgDiv;
@@ -2144,7 +2546,15 @@ Respond in the following JSON format:
             sendBtn.innerHTML = '<span class="spinner"></span>';
 
             const streaming = document.getElementById('streaming-toggle')?.checked ?? true;
+            const enableThinking = document.getElementById('thinking-toggle')?.checked ?? true;
+            const selectedModel = document.getElementById('test-model')?.value || 'default';
             const startTime = Date.now();
+
+            const requestBody = {
+                model: selectedModel,
+                messages: chatMessages,
+                enable_thinking: enableThinking,
+            };
 
             try {
                 if (streaming) {
@@ -2152,7 +2562,7 @@ Respond in the following JSON format:
                     const response = await fetch('/v1/chat/completions', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer {{ api_key }}' },
-                        body: JSON.stringify({ messages: chatMessages, stream: true })
+                        body: JSON.stringify({ ...requestBody, stream: true })
                     });
 
                     if (!response.ok) {
@@ -2180,12 +2590,19 @@ Respond in the following JSON format:
                                 const parsed = JSON.parse(data);
                                 const delta = parsed.choices?.[0]?.delta?.content || '';
                                 assistantContent += delta;
-                                contentDiv.textContent = assistantContent;
+                                renderAssistantContent(contentDiv, assistantContent, {
+                                    streaming: true,
+                                    expectThinking: enableThinking,
+                                });
                                 document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
                             } catch {}
                         }
                     }
 
+                    renderAssistantContent(contentDiv, assistantContent, {
+                        streaming: false,
+                        expectThinking: enableThinking,
+                    });
                     chatMessages[chatMessages.length - 1].content = assistantContent;
                     const durationMs = Date.now() - startTime;
                     // Estimate tokens (rough approximation)
@@ -2197,14 +2614,21 @@ Respond in the following JSON format:
                     const response = await fetch('/v1/chat/completions', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer {{ api_key }}' },
-                        body: JSON.stringify({ messages: chatMessages, stream: false })
+                        body: JSON.stringify({ ...requestBody, stream: false })
                     });
 
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.error?.message || data.detail || 'Request failed');
 
-                    const assistantMessage = data.choices?.[0]?.message?.content || 'No response';
-                    addMessage('assistant', assistantMessage);
+                    const message = data.choices?.[0]?.message || {};
+                    const answer = message.content || 'No response';
+                    const reasoning = message.reasoning_content || null;
+                    // Keep raw tagged content in history so chat templates can re-parse prior turns
+                    const rawContent = reasoning
+                        ? `<think>\n${reasoning}\n</think>\n\n${answer}`
+                        : answer;
+
+                    addMessage('assistant', answer, { rawContent });
 
                     const durationMs = Date.now() - startTime;
                     const usage = data.usage || {};
@@ -2336,8 +2760,218 @@ Respond in the following JSON format:
             });
         }
 
+        let callLogOffset = 0;
+        const callLogLimit = 25;
+        let selectedCallId = null;
+        const callLogCache = {};
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
+        function formatCallTime(ts) {
+            if (!ts) return '—';
+            const date = new Date(ts * 1000);
+            return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function toolBadge(call) {
+            if (call.rejected_tool_names && call.rejected_tool_names.length) {
+                return `<span class="badge badge-error" title="Rejected: ${escapeHtml(call.rejected_tool_names.join(', '))}">rejected</span>`;
+            }
+            if (call.tool_names && call.tool_names.length) {
+                return `<span class="badge badge-tools">${escapeHtml(call.tool_names.join(', '))}</span>`;
+            }
+            if (call.has_tools) return '<span class="badge badge-info">tools</span>';
+            return '<span style="color: var(--text-secondary);">—</span>';
+        }
+
+        function statusBadge(status) {
+            const cls = status === 'ok' ? 'badge-success' : (status === 'error' ? 'badge-error' : 'badge-warning');
+            return `<span class="badge ${cls}">${escapeHtml(status || 'ok')}</span>`;
+        }
+
+        async function loadCallLogs(offset = 0) {
+            callLogOffset = Math.max(0, offset);
+            const status = document.getElementById('call-log-status')?.value || '';
+            const tools = document.getElementById('call-log-tools')?.value || '';
+            const q = document.getElementById('call-log-search')?.value?.trim() || '';
+            const params = new URLSearchParams({ limit: String(callLogLimit), offset: String(callLogOffset) });
+            if (status) params.set('status', status);
+            if (tools) params.set('has_tools', tools);
+            if (q) params.set('q', q);
+            try {
+                const data = await api('GET', `/api/admin/metrics/calls?${params.toString()}`);
+                renderCallLogs(data);
+            } catch (err) {
+                console.error('Failed to load call logs:', err);
+            }
+        }
+
+        function renderCallLogs(data) {
+            const calls = data.calls || [];
+            const empty = document.getElementById('call-log-empty');
+            const wrap = document.getElementById('call-log-table-wrap');
+            const body = document.getElementById('call-log-body');
+            const count = document.getElementById('call-log-count');
+            const prev = document.getElementById('call-log-prev');
+            const next = document.getElementById('call-log-next');
+            const detail = document.getElementById('call-log-detail');
+
+            if (!calls.length && callLogOffset === 0) {
+                empty.style.display = 'block';
+                wrap.style.display = 'none';
+                if (detail) { detail.classList.remove('open'); detail.innerHTML = ''; }
+            } else {
+                empty.style.display = 'none';
+                wrap.style.display = 'block';
+                calls.forEach((call) => { callLogCache[call.id] = call; });
+                body.innerHTML = calls.map((call) => `
+                    <tr data-id="${escapeHtml(call.id)}" class="${call.id === selectedCallId ? 'active' : ''}" onclick="showCallLogById('${escapeHtml(call.id)}')">
+                        <td>${escapeHtml(formatCallTime(call.timestamp))}</td>
+                        <td class="log-model" title="${escapeHtml(call.model || '')}">${escapeHtml(call.model || '—')}</td>
+                        <td>${escapeHtml(call.endpoint || '')}${call.stream ? ' · stream' : ''}</td>
+                        <td>${(call.prompt_tokens || 0).toLocaleString()} / ${(call.completion_tokens || 0).toLocaleString()}</td>
+                        <td>${call.duration_ms != null ? `${Math.round(call.duration_ms)} ms` : '—'}</td>
+                        <td>${finishCell(call)}</td>
+                        <td>${toolBadge(call)}</td>
+                        <td>${statusBadge(call.status)}</td>
+                        <td class="log-preview" title="${escapeHtml(call.stop_explanation || '')}">${escapeHtml(call.stop_explanation || '—')}</td>
+                        <td class="log-preview" title="${escapeHtml(call.prompt_preview || '')}">${escapeHtml(call.prompt_preview || '—')}</td>
+                    </tr>
+                `).join('');
+            }
+
+            const total = data.total || 0;
+            const end = Math.min(total, callLogOffset + calls.length);
+            count.textContent = total ? `Showing ${callLogOffset + 1}–${end} of ${total}` : '';
+            prev.disabled = callLogOffset <= 0;
+            next.disabled = callLogOffset + callLogLimit >= total;
+        }
+
+        function finishCell(call) {
+            const reason = escapeHtml(call.finish_reason || '—');
+            if (call.truncated) {
+                return `${reason} <span class="badge badge-warning">truncated</span>`;
+            }
+            return reason;
+        }
+
+        async function showCallLogById(callId) {
+            selectedCallId = callId;
+            document.querySelectorAll('#call-log-body tr').forEach((row) => {
+                row.classList.toggle('active', row.dataset.id === callId);
+            });
+            const detail = document.getElementById('call-log-detail');
+            detail.classList.add('open');
+            detail.innerHTML = '<div style="color: var(--text-secondary);">Loading full transcript…</div>';
+            try {
+                const call = await api('GET', `/api/admin/metrics/calls/${encodeURIComponent(callId)}`);
+                callLogCache[callId] = Object.assign({}, callLogCache[callId], call);
+                showCallLog(call);
+            } catch (err) {
+                const cached = callLogCache[callId];
+                if (cached) {
+                    showCallLog(cached);
+                } else {
+                    detail.innerHTML = `<div style="color: var(--error);">Failed to load call: ${escapeHtml(err.message || err)}</div>`;
+                }
+            }
+        }
+
+        let lastDetailCall = null;
+
+        function copyLogField(field) {
+            const call = lastDetailCall;
+            if (!call) return;
+            const values = {
+                prompt: call.prompt_text || call.prompt_preview || '',
+                completion: call.completion_text || call.completion_preview || '',
+            };
+            const text = values[field];
+            if (!text) return;
+            navigator.clipboard.writeText(text).catch(() => {});
+        }
+
+        function showCallLog(call) {
+            lastDetailCall = call;
+            selectedCallId = call.id;
+            document.querySelectorAll('#call-log-body tr').forEach((row) => {
+                row.classList.toggle('active', row.dataset.id === call.id);
+            });
+            const rejected = (call.rejected_tool_names || []).join(', ') || '—';
+            const used = (call.tool_names || []).join(', ') || '—';
+            const sampling = call.sampling || {};
+            const tokenSource = call.token_count_source || 'estimated';
+            const maxTok = call.max_tokens != null ? call.max_tokens : sampling.max_tokens;
+            const promptBody = call.prompt_text || call.prompt_preview || '—';
+            const completionBody = call.completion_text || call.completion_preview || '—';
+            const reasoningBody = call.reasoning_text || '';
+            const toolCallsJson = call.tool_calls ? JSON.stringify(call.tool_calls, null, 2) : '';
+            const samplingJson = Object.keys(sampling).length ? JSON.stringify(sampling, null, 2) : '';
+            const stopClass = call.truncated ? 'log-stop truncated' : 'log-stop';
+            const detail = document.getElementById('call-log-detail');
+            detail.classList.add('open');
+            detail.innerHTML = `
+                <div style="display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                    <strong>${escapeHtml(call.id)}</strong>
+                    <span style="color: var(--text-secondary);">${escapeHtml(formatCallTime(call.timestamp))}</span>
+                </div>
+                <div class="${stopClass}">
+                    <div class="status-label">${call.truncated ? 'Ended early' : 'How it ended'}</div>
+                    <div>${escapeHtml(call.stop_explanation || 'No stop diagnosis stored for this call (logged before this field existed).')}</div>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-top:0.75rem;">
+                    <div><div class="status-label">Model</div><div class="log-model">${escapeHtml(call.model || '—')}</div></div>
+                    <div><div class="status-label">Finish (client)</div>${finishCell(call)}</div>
+                    <div><div class="status-label">Finish (engine)</div>${escapeHtml(call.engine_finish_reason || '—')}</div>
+                    <div><div class="status-label">Tokens</div>${(call.prompt_tokens || 0).toLocaleString()} prompt / ${(call.completion_tokens || 0).toLocaleString()} completion${maxTok != null ? ` of ${Number(maxTok).toLocaleString()} max` : ''} <span style="color:var(--text-secondary)">(${escapeHtml(tokenSource)})</span></div>
+                    <div><div class="status-label">Duration</div>${call.duration_ms != null ? `${(call.duration_ms / 1000).toFixed(1)} s` : '—'}</div>
+                    <div><div class="status-label">Speed</div>${call.tokens_per_second ? `${call.tokens_per_second} tok/s` : '—'}</div>
+                    <div><div class="status-label">Sampling</div>temp ${escapeHtml(sampling.temperature ?? '—')} · top_p ${escapeHtml(sampling.top_p ?? '—')} · think ${sampling.enable_thinking == null ? 'default' : sampling.enable_thinking}</div>
+                    <div><div class="status-label">Tool choice</div>${escapeHtml(call.tool_choice || 'auto')}</div>
+                    <div><div class="status-label">Called</div>${escapeHtml(used)}</div>
+                    <div><div class="status-label">Rejected names</div>${escapeHtml(rejected)}</div>
+                </div>
+                <div style="margin-top:0.75rem;">
+                    <div class="log-detail-heading">
+                        <div class="status-label">Full prompt</div>
+                        <button class="btn-secondary btn-small" type="button" onclick="copyLogField('prompt')">Copy</button>
+                    </div>
+                    <pre>${escapeHtml(promptBody)}</pre>
+                </div>
+                ${reasoningBody ? `<div style="margin-top:0.75rem;"><div class="status-label">Thinking</div><pre>${escapeHtml(reasoningBody)}</pre></div>` : ''}
+                <div style="margin-top:0.75rem;">
+                    <div class="log-detail-heading">
+                        <div class="status-label">Full completion</div>
+                        <button class="btn-secondary btn-small" type="button" onclick="copyLogField('completion')">Copy</button>
+                    </div>
+                    <pre>${escapeHtml(completionBody)}</pre>
+                </div>
+                ${toolCallsJson ? `<div style="margin-top:0.75rem;"><div class="status-label">Tool calls</div><pre>${escapeHtml(toolCallsJson)}</pre></div>` : ''}
+                ${samplingJson ? `<div style="margin-top:0.75rem;"><div class="status-label">Sampling / request settings</div><pre>${escapeHtml(samplingJson)}</pre></div>` : ''}
+                ${call.error ? `<div style="margin-top:0.75rem; color: var(--error);"><div class="status-label">Error</div><pre>${escapeHtml(call.error)}</pre></div>` : ''}
+            `;
+        }
+
+        async function clearCallLogs() {
+            if (!confirm('Delete all stored API call logs?')) return;
+            try {
+                await api('DELETE', '/api/admin/metrics/calls');
+                selectedCallId = null;
+                await loadCallLogs(0);
+            } catch (err) {
+                console.error('Failed to clear call logs:', err);
+            }
+        }
+
         async function updateAnalytics() {
-            if (isRealtime) return; // Don't update when in realtime mode
+            if (isRealtime) {
+                await loadCallLogs(callLogOffset);
+                return;
+            }
 
             const minutes = parseInt(document.getElementById('time-window').value);
             try {
@@ -2379,6 +3013,7 @@ Respond in the following JSON format:
             } catch (err) {
                 console.error('Failed to update analytics:', err);
             }
+            await loadCallLogs(callLogOffset);
         }
 
         function toggleRealtime() {
